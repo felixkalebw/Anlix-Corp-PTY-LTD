@@ -1,0 +1,5 @@
+import { Costing } from '@/components/screens'
+
+export default function Page() {
+  return <Costing />
+}
