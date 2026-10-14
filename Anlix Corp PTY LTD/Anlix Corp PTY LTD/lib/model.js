@@ -46,6 +46,24 @@ export function stat(S, o) {
   return ['Awaiting ' + (c.q < S.thr ? 'payment' : 'deposit'), 'a']
 }
 
+export const STAGES = ['Artwork and sample approval', 'Material allocation', 'Printing and pressing', 'Cutting and sewing', 'Quality inspection', 'Packing and delivery', 'Final payment and receipt']
+export const mkStages = () => STAGES.map((k) => ({ k, st: 'pending' }))
+export const isDone = (s) => s.st === 'done' || s.st === 'skipped'
+export const progress = (o) => { const s = o.stages || []; return s.length ? Math.round((s.filter(isDone).length / s.length) * 100) : 0 }
+export const overdue = (o) => !!o.dueDate && o.dueDate < TODAY && !o.closed
+export function phase(S, o) {
+  const c = calc(S, o)
+  if (o.closed) return 'Completed'
+  if (!o.prod) return c.ok ? 'Ready to start production' : 'Awaiting ' + (c.q < S.thr ? 'payment' : 'deposit')
+  const st = o.stages || []
+  if (st.some((s) => /^Rework/.test(s.k) && s.st === 'active')) return 'Quality hold'
+  const a = st.find((s) => s.k === STAGES[0])
+  if (a && !isDone(a)) return 'Artwork pending'
+  const rest = st.filter((s) => s.k !== STAGES[6])
+  if (rest.length && rest.every(isDone)) return 'Ready for collection'
+  return 'In production'
+}
+export const phaseTag = (p) => (p === 'Completed' || p === 'Ready for collection' ? 'g' : /^Awaiting|hold|pending/.test(p) ? 'a' : 'b')
 export const jobNo = (S) => `JC-${TODAY.slice(0, 4)}-${String(S.seq + 1).padStart(4, '0')}`
 const now = () => new Date().toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
 
@@ -69,20 +87,49 @@ export function reduce(S, a) {
       const n = S.seq + 1, p = String(n).padStart(4, '0'), y = TODAY.slice(0, 4), q = a.lines.reduce((t, l) => t + l.q, 0)
       const lines = a.lines.map((l) => { const z = sz(S, l.s); return { ...l, unitPrice: price(S, z, q), unitCost: cost(S, z) } })
       const o = { jc: `JC-${y}-${p}`, qt: `QT-${y}-${p}`, inv: `INV-${y}-${p}`, date: TODAY, by: a.d.by, placed: a.d.placed.trim(), ent: a.d.ent.trim(), lines,
-        dt: a.d.dt, dv: +a.d.dv || 0, dr: a.d.dr, pays: [], prod: false, prodStatus: 'Awaiting production', priority: 'Normal', dueDate: '', createdAt: new Date().toISOString() }
+        dt: a.d.dt, dv: +a.d.dv || 0, dr: a.d.dr, pays: [], prod: false, prodStatus: 'Awaiting production', priority: 'Normal', dueDate: a.d.dueDate || '', phone: (a.d.phone || '').trim(), stages: mkStages(), createdAt: new Date().toISOString() }
       const e = [log(`Job card ${o.jc} created, linked to ${o.qt} and ${o.inv}`, o.jc, a.d.by)]
       if (o.dv > 0) e.push(log(`Discount ${o.dt === '%' ? o.dv + '%' : f2(o.dv)} applied: ${o.dr}`, o.jc, a.d.by))
       return { ...add(...e), seq: n, user: a.d.by, orders: [...S.orders, o] }
     }
     case 'pay': {
       if (!(a.amt > 0)) return S
+      const po = S.orders.find((o) => o.jc === a.jc)
+      if (!po || a.amt > calc(S, po).bal + 0.005) return S
       const orders = S.orders.map((o) => (o.jc === a.jc ? { ...o, pays: [...o.pays, { d: a.d, amt: a.amt, by: a.by, ent: a.ent }] } : o))
       return { ...add(log(`Payment ${f2(a.amt)} recorded from ${a.by}`, a.jc)), orders }
     }
     case 'produce': {
       const o = S.orders.find((x) => x.jc === a.jc)
       if (!o || !calc(S, o).ok) return S
-      return { ...add(log('Moved to production', a.jc)), orders: S.orders.map((x) => (x.jc === a.jc ? { ...x, prod: true, prodStatus: 'Printing' } : x)) }
+      return { ...add(log('Moved to production', a.jc)), orders: S.orders.map((x) => (x.jc === a.jc ? { ...x, prod: true, stages: x.stages && x.stages.length ? x.stages : mkStages(), prodStatus: STAGES[0] } : x)) }
+    }
+    case 'stage': {
+      const o = S.orders.find((x) => x.jc === a.jc)
+      if (!o || !o.prod) return S
+      const t = new Date().toISOString(), st = (o.stages && o.stages.length ? o.stages : mkStages()).map((s) => ({ ...s }))
+      const i = st.findIndex((s) => s.k === a.k)
+      if (i < 0) return S
+      const s = st[i], words = { start: 'started', done: 'completed', skip: 'skipped', pass: 'passed inspection', fail: 'failed inspection' }
+      if (a.op === 'start') { s.st = 'active'; s.start = t; s.by = S.user }
+      else if (a.op === 'skip') { s.st = 'skipped'; s.end = t; s.by = S.user }
+      else if (a.op === 'done' || a.op === 'pass') { s.st = 'done'; s.end = t; s.by = S.user; s.start = s.start || t; if (a.op === 'pass') s.result = 'Pass' }
+      else if (a.op === 'fail') {
+        s.st = 'pending'; s.result = 'Fail'; s.fails = (s.fails || 0) + 1; s.by = S.user
+        const n = st.filter((x) => /^Rework/.test(x.k)).length + 1
+        st.splice(i + 1, 0, { k: 'Rework and reinspection' + (n > 1 ? ' ' + n : ''), st: 'active', start: t, by: S.user })
+      }
+      const next = st.find((x) => !isDone(x))
+      return { ...add(log(`Stage "${a.k}" ${words[a.op]}`, a.jc)), orders: S.orders.map((x) => (x.jc === a.jc ? { ...x, stages: st, prodStatus: next ? next.k : 'Packed' } : x)) }
+    }
+    case 'close': {
+      const o = S.orders.find((x) => x.jc === a.jc)
+      if (!o || o.closed || !(o.stages || []).length || !o.stages.every(isDone)) return S
+      const c = calc(S, o)
+      if (c.bal > 0.005) return S
+      const extra = sum((S.finance || []).filter((x) => x.ref === o.jc), (x) => x.amount)
+      const closed = { at: new Date().toISOString(), revenue: c.net, cost: c.cs + extra, profit: c.net - c.cs - extra }
+      return { ...add(log(`Order closed. Actual profit ${f2(closed.profit)}`, a.jc)), orders: S.orders.map((x) => (x.jc === a.jc ? { ...x, closed, prodStatus: 'Completed' } : x)) }
     }
     case 'rate': return { ...add(log(`Rate ${a.k} changed to ${a.v}`)), R: { ...S.R, [a.k]: a.v } }
     case 'tier': return { ...add(log(`${a.c} price tier ${a.j} changed to ${a.v}`)), T: { ...S.T, [a.c]: S.T[a.c].map((x, i) => (i === a.j ? a.v : x)) } }
