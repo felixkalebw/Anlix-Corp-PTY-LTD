@@ -1,9 +1,12 @@
 'use client'
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import { useApp } from './Store'
 import { TODAY, calc, unit, phase } from '@/lib/model'
+
+// Payment details printed on every invoice and quotation
+export const PAYMENT = ['MyZaka: 76675006', 'Smega: 73397584', 'Account name (MyZaka and Smega): Andrew Kale', 'Or E-wallet: 76 675 006']
 
 const P = (n) => 'P' + (+n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const D = (s) => {
@@ -57,6 +60,7 @@ const CSS = `
 .inv-tot .bal{border-top:1px solid #000;margin-top:8px;padding-top:9px;font-weight:700}
 .inv-notes{margin-top:44px;font-size:13.5px;line-height:1.6}
 .inv-stamp{display:flex;justify-content:flex-end;margin-top:14px;padding-right:16px}
+.inv-pay{margin-top:22px;font-size:13.5px;line-height:1.6}
 .inv-foot{margin-top:auto;border-top:1px solid #000;padding-top:9px;text-align:center;font-size:10.5px}
 @media print{
  .inv-sheet img{-webkit-print-color-adjust:exact;print-color-adjust:exact}
@@ -67,13 +71,26 @@ const CSS = `
  .inv-sheet{box-shadow:none;transform:none!important;width:210mm;min-height:297mm;position:relative}
 }`
 
-export function Invoice() {
-  const { jc } = useParams()
-  const { S } = useApp()
+// One line per size and colour: quantity only, no player names or numbers
+function groupLines(S, o, c) {
+  const ix = (n) => { const i = S.sizes.findIndex((z) => z.n === n); return i < 0 ? 999 : i }
+  const map = new Map()
+  o.lines.forEach((l) => {
+    const u = unit(S, l, c.q), col = String(l.colour || '').trim()
+    const key = [col.toLowerCase(), l.s, u.price].join('|')
+    const g = map.get(key) || { col, s: l.s, p: u.price, q: 0 }
+    g.q += +l.q || 0
+    map.set(key, g)
+  })
+  return [...map.values()]
+    .sort((a, b) => ix(a.s) - ix(b.s) || a.col.localeCompare(b.col))
+    .map((g) => ({ d: [g.col, 'T-shirts', g.s ? `(${g.s})` : ''].filter(Boolean).join(' '), q: g.q, p: g.p, a: g.q * g.p }))
+}
+
+// The one template used by both the invoice and the quotation
+function Sheet({ title, sub, back, meta, to, rows, totals, notes }) {
   const wrap = useRef(null), sheet = useRef(null)
   const [k, setK] = useState({ s: 1, h: 1123 })
-  const o = S.orders.find((x) => x.jc === decodeURIComponent(jc))
-
   useEffect(() => {
     const fit = () => {
       if (!wrap.current?.parentElement || !sheet.current) return
@@ -84,7 +101,41 @@ export function Invoice() {
     fit(); addEventListener('resize', fit)
     return () => removeEventListener('resize', fit)
   })
+  return (
+    <>
+      <style>{CSS}</style>
+      <div className="inv-bar">
+        <div><h1 style={{ margin: 0 }}>{title.page}</h1><div className="sub">{sub}</div></div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>{back}<button className="btn" onClick={() => window.print()}>Print or save as PDF</button></div>
+      </div>
+      <div className="inv-wrap" ref={wrap} style={{ width: 794 * k.s, height: k.h }}>
+        <div className="inv-sheet" ref={sheet} style={{ transform: `scale(${k.s})` }}>
+          <div className="inv-top"><Logo /><div className="inv-title">{title.sheet}</div></div>
+          <div className="inv-meta">
+            <div><strong>Anlix Corp (Pty) Ltd</strong><br />Tlokweng, Gaborone, Botswana<br />Tel: 76 675 006<br />Email: anlixbw@gmail.com</div>
+            <dl>{meta.map(([a, b, bold]) => <Fragment key={a}><dt>{a}</dt><dd>{bold ? <strong>{b}</strong> : b}</dd></Fragment>)}</dl>
+          </div>
+          <div className="inv-bill">{to.label}</div>
+          <div className="inv-to"><strong>{to.name}</strong><br />{to.ent}{to.phone ? <><br />Tel: {to.phone}</> : null}</div>
+          <table>
+            <thead><tr><th>Description</th><th>Qty</th><th>Unit Price</th><th>Amount</th></tr></thead>
+            <tbody>{rows.map((r, i) => <tr key={i}><td>{r.d}</td><td>{r.q}</td><td>{P(r.p)}</td><td>{P(r.a)}</td></tr>)}</tbody>
+          </table>
+          <div className="inv-tot">{totals.map(([a, b, cls]) => <div key={a} className={cls || ''}><span>{a}</span><span>{b}</span></div>)}</div>
+          <div className="inv-notes">{notes}</div>
+          <div className="inv-pay"><strong>Payment details</strong>{PAYMENT.map((l) => <div key={l}>{l}</div>)}</div>
+          <div className="inv-stamp"><Stamp /></div>
+          <div className="inv-foot">Anlix Corp (Pty) Ltd &nbsp;|&nbsp; anlixbw@gmail.com &nbsp;|&nbsp; 76 675 006</div>
+        </div>
+      </div>
+    </>
+  )
+}
 
+export function Invoice() {
+  const { jc } = useParams()
+  const { S } = useApp()
+  const o = S.orders.find((x) => x.jc === decodeURIComponent(jc))
   if (!o) return (<div className="top"><h1>Job card not found</h1><Link href="/orders">Back to orders</Link></div>)
   const back = <Link href={'/orders/' + o.jc}>Back to job card {o.jc}</Link>
   if (!isCompleted(S, o)) return (
@@ -93,52 +144,42 @@ export function Invoice() {
       <div className="card"><div className="note w">The invoice is produced when the job card is completed. This order is currently: {phase(S, o)}.</div><p>{back}</p></div>
     </>
   )
-
   const c = calc(S, o), st = invoiceStatus(o, c)
   const date = o.closed?.at ? String(o.closed.at).slice(0, 10) : TODAY
-  const rows = o.lines.map((l) => {
-    const u = unit(S, l, c.q)
-    return { d: [l.colour, l.desc || 'T-shirts', l.s ? `(${l.s})` : ''].filter(Boolean).join(' '), q: l.q, p: u.price, a: l.q * u.price }
-  })
-
+  const meta = [['Invoice No:', o.inv], ['Date:', D(date)]]
+  if (st.paid > 0) meta.push([st.bal > 0 ? 'Part Paid:' : 'Paid:', D(st.last)])
+  meta.push(['Job Card:', o.jc], ['Status:', st.label, true])
+  const totals = [['Subtotal', P(c.sub)]]
+  if (c.d > 0) totals.push(['Discount', '-' + P(c.d)], ['Net Total', P(c.net)])
+  if (st.paid > 0) totals.push(['Amount Paid', '-' + P(st.paid)])
+  totals.push(['Balance Due', P(st.bal), 'bal'])
   return (
-    <>
-      <style>{CSS}</style>
-      <div className="inv-bar">
-        <div><h1 style={{ margin: 0 }}>Invoice {o.inv}</h1><div className="sub">Created from job card {o.jc}</div></div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>{back}<button className="btn" onClick={() => window.print()}>Print or save as PDF</button></div>
-      </div>
-      <div className="inv-wrap" ref={wrap} style={{ width: 794 * k.s, height: k.h }}>
-        <div className="inv-sheet" ref={sheet} style={{ transform: `scale(${k.s})` }}>
-          <div className="inv-top"><Logo /><div className="inv-title">INVOICE</div></div>
-          <div className="inv-meta">
-            <div><strong>Anlix Corp (Pty) Ltd</strong><br />Tlokweng, Gaborone, Botswana<br />Tel: 76 675 006<br />Email: anlixbw@gmail.com</div>
-            <dl>
-              <dt>Invoice No:</dt><dd>{o.inv}</dd>
-              <dt>Date:</dt><dd>{D(date)}</dd>
-              {st.paid > 0 && <><dt>{st.bal > 0 ? 'Part Paid:' : 'Paid:'}</dt><dd>{D(st.last)}</dd></>}
-              <dt>Job Card:</dt><dd>{o.jc}</dd>
-              <dt>Status:</dt><dd><strong>{st.label}</strong></dd>
-            </dl>
-          </div>
-          <div className="inv-bill">BILLED TO</div>
-          <div className="inv-to"><strong>{o.placed}</strong><br />{o.ent}{o.phone ? <><br />Tel: {o.phone}</> : null}</div>
-          <table>
-            <thead><tr><th>Description</th><th>Qty</th><th>Unit Price</th><th>Amount</th></tr></thead>
-            <tbody>{rows.map((r, i) => <tr key={i}><td>{r.d}</td><td>{r.q}</td><td>{P(r.p)}</td><td>{P(r.a)}</td></tr>)}</tbody>
-          </table>
-          <div className="inv-tot">
-            <div><span>Subtotal</span><span>{P(c.sub)}</span></div>
-            {c.d > 0 && <div><span>Discount</span><span>-{P(c.d)}</span></div>}
-            {c.d > 0 && <div><span>Net Total</span><span>{P(c.net)}</span></div>}
-            {st.paid > 0 && <div><span>Amount Paid</span><span>-{P(st.paid)}</span></div>}
-            <div className="bal"><span>Balance Due</span><span>{P(st.bal)}</span></div>
-          </div>
-          <div className="inv-notes">{st.note}<br /><strong>{st.tail}</strong><br />Thank you for your business.</div>
-          <div className="inv-stamp"><Stamp /></div>
-          <div className="inv-foot">Anlix Corp (Pty) Ltd &nbsp;|&nbsp; anlixbw@gmail.com &nbsp;|&nbsp; 76 675 006</div>
-        </div>
-      </div>
-    </>
+    <Sheet title={{ page: 'Invoice ' + o.inv, sheet: 'INVOICE' }} sub={'Created from job card ' + o.jc} back={back}
+      meta={meta} to={{ label: 'BILLED TO', name: o.placed, ent: o.ent, phone: o.phone }}
+      rows={groupLines(S, o, c)} totals={totals}
+      notes={<>{st.note}<br /><strong>{st.tail}</strong><br />Thank you for your business.</>} />
+  )
+}
+
+// Quotation: same template, prices come from the tracker's size prices and the MOQ rule (S.thr)
+export function Quotation() {
+  const { jc } = useParams()
+  const { S } = useApp()
+  const o = S.orders.find((x) => x.jc === decodeURIComponent(jc))
+  if (!o) return (<div className="top"><h1>Job card not found</h1><Link href="/orders">Back to orders</Link></div>)
+  const c = calc(S, o)
+  const back = <Link href={'/orders/' + o.jc}>Back to job card {o.jc}</Link>
+  const totals = [['Subtotal', P(c.sub)]]
+  if (c.d > 0) totals.push(['Discount', '-' + P(c.d)])
+  totals.push(['Total', P(c.net), 'bal'])
+  const terms = c.q < S.thr
+    ? `Orders under ${S.thr} shirts are priced at the standard rate. Full payment of ${P(c.req)} is required before production.`
+    : `Orders of ${S.thr} shirts or more are priced at the bulk rate. A ${S.dep}% deposit of ${P(c.req)} is required before production.`
+  return (
+    <Sheet title={{ page: 'Quotation ' + o.qt, sheet: 'QUOTATION' }} sub={'Job card ' + o.jc} back={back}
+      meta={[['Quotation No:', o.qt], ['Date:', D(o.date)], ['Job Card:', o.jc], ['Total Shirts:', String(c.q)]]}
+      to={{ label: 'PREPARED FOR', name: o.placed, ent: o.ent, phone: o.phone }}
+      rows={groupLines(S, o, c)} totals={totals}
+      notes={<>{terms}<br />Thank you for your business.</>} />
   )
 }
