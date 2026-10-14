@@ -4,7 +4,8 @@ import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 import { useAuth } from "@/components/AuthProvider";
 import { useApp } from "@/components/Store";
-import { cost, price, sz } from "@/lib/model";
+import { cost, price, sz, calc as jobCalc } from "@/lib/model";
+import { isCompleted, invoiceStatus } from "@/components/Invoice";
 
 // Your details, printed on every quotation and invoice.
 const COMPANY = { name: "Anlix Corp (Pty) Ltd", lines: ["Tlokweng, Gaborone, Botswana", "Tel: 76 675 006", "Email: anlixbw@gmail.com"] };
@@ -373,6 +374,7 @@ function QuotationsTab({ canEdit }) {
 
 /* ---------- invoices ---------- */
 function InvoicesTab({ canEdit }) {
+  const { S } = useApp();
   const [rows, setRows] = useState(null);
   const [filter, setFilter] = useState("");
   const [view, setView] = useState(null);
@@ -398,10 +400,29 @@ function InvoicesTab({ canEdit }) {
   };
   if (!rows) return <p>Loading...</p>;
   const shown = rows.filter((r) => [r.invoice_no, r.client_name, r.job_card].join(" ").toLowerCase().includes(filter.toLowerCase()));
+  // Invoices for completed tracker jobs that are not already saved as a document in the database
+  const fromTracker = (S.orders || [])
+    .filter((o) => isCompleted(S, o))
+    .filter((o) => !rows.some((r) => (r.job_card && r.job_card === o.jc) || (r.invoice_no && r.invoice_no === o.inv)))
+    .filter((o) => [o.inv, o.jc, o.placed, o.ent].join(" ").toLowerCase().includes(filter.toLowerCase()))
+    .map((o) => ({ o, c: jobCalc(S, o) }))
+    .map(({ o, c }) => ({ o, c, st: invoiceStatus(o, c) }))
+    .sort((a, b) => String(b.o.closed?.at || b.o.date || "").localeCompare(String(a.o.closed?.at || a.o.date || "")));
   return (
     <>
       <input className="ax-sel" style={{ width: 260, margin: "0 0 12px" }} placeholder="Search number, client, job card" value={filter} onChange={(e) => setFilter(e.target.value)} />
       {msg && <div className="ax-msg err">{msg}</div>}
+      {fromTracker.map(({ o, c, st }) => {
+        const d = String(o.closed?.at || o.date || "").slice(0, 10);
+        return (
+          <div className="ax-item" key={"trk-" + o.jc}>
+            <div className="grow"><b>{o.inv}</b> · {o.placed || "(no client)"}{o.ent ? ` · ${o.ent}` : ""}
+              <small>{fmtDate(d) || "no date"} · {money(c.net)}{st.paid > 0 ? ` · paid ${money(st.paid)} · balance ${money(st.bal)}` : ""} · Job card {o.jc} · completed job</small></div>
+            {badge(st.full ? "paid" : "issued")}
+            <Link className="ax-btn alt" href={`/orders/${o.jc}/invoice`}>View / Print</Link>
+          </div>
+        );
+      })}
       {shown.map((r) => {
         const balance = (+r.total || 0) - (+r.amount_paid || 0);
         return (
@@ -416,7 +437,7 @@ function InvoicesTab({ canEdit }) {
           </div>
         );
       })}
-      {!shown.length && <p>No invoices yet.</p>}
+      {!shown.length && !fromTracker.length && <p>No invoices yet.</p>}
       {view && <Viewer kind="invoice" row={view} onClose={() => setView(null)} />}
     </>
   );
