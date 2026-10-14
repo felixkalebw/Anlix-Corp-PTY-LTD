@@ -19,26 +19,33 @@ const PER_KEY_MS = 12000; // free tier: ~10 requests/minute per key
 const cooldowns = new Map(KEYS.map((k) => [k, 0]));
 let ki = 0;
 
-const SYSTEM = `You read quotations and invoices for a clothing print business and return structured JSON.
-Return ONLY a JSON object with exactly these keys:
+const SYSTEM = `You read quotations and invoices for Anlix Corp, a T-shirt and clothing printing business in Botswana, and return structured JSON.
+Amounts are in Botswana pula (written P or BWP). Return ONLY a JSON object with exactly these keys:
 {
  "doc_type": "quotation" | "invoice" | "other",
- "doc_number": "the quotation or invoice number printed on the document",
- "issued_on": "YYYY-MM-DD date the document was issued",
+ "doc_number": "the number printed on the document, for example INV-0002",
+ "issued_on": "YYYY-MM-DD date of the document",
  "valid_until_or_due_on": "YYYY-MM-DD (quotation: valid until; invoice: due date) or empty",
+ "paid_on": "YYYY-MM-DD from a 'Part Paid' or 'Paid' date, else empty",
  "job_card": "job card / work order / order number printed on the document, else empty",
  "quotation_ref": "for an invoice: the quotation number it refers to, else empty",
- "client_name": "", "client_contact": "", "client_email": "", "client_address": "",
- "vat_pct": number or null, "subtotal": number or null, "vat_amount": number or null, "total": number or null,
+ "client_name": "the person or main name under BILLED TO / Bill to",
+ "client_organisation": "the company, council or department on the next line, else empty",
+ "client_contact": "phone number, else empty", "client_email": "", "client_address": "",
+ "vat_pct": number or null, "subtotal": number or null, "vat_amount": number or null,
+ "total": "the full amount of the document BEFORE any payment is deducted",
+ "amount_paid": "total already paid or deducted, else 0",
+ "balance_due": number or null,
+ "payment_status": "the status printed on the document, for example BALANCE DUE or PAID",
  "notes": "terms, remarks or payment details worth keeping",
  "lines": [{"size": "", "quality": "", "description": "", "qty": number, "unit_price": number, "line_total": number or null}],
  "warnings": ["anything unclear, cut off or hard to read"]
 }
 Rules:
 - One entry in "lines" per size and quality combination. Never merge different sizes or qualities into one line.
-- "size" is the size exactly as written (for example S, M, XL, Kids 8, A3). "quality" is the grade or quality written for that item (for example Premium, Standard, 180gsm). If the document does not state one, use an empty string.
+- "size" is the size exactly as written (for example S, M, XL, Kids 8, A3). "quality" is the grade or quality written for that item (for example Premium, Standard, 180gsm). If the document does not state one, use an empty string. Put the product name (for example "Bots replica T-shirts") in "description".
 - Numbers are plain numbers: no currency symbols and no thousands separators.
-- Dates are YYYY-MM-DD. If a date is ambiguous or missing, leave it empty and add a warning.
+- Dates are YYYY-MM-DD. Convert dates written in words, such as 13 October 2026. If a date is missing, leave it empty and add a warning.
 - Never invent values. Anything unreadable becomes an empty string or null, plus a warning.`;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -134,13 +141,19 @@ function normalize(p) {
     warnings.push(`The lines add up to ${sum.toFixed(2)} but the document says ${stated.toFixed(2)}. Check quantities and prices.`);
   if (!lines.length) warnings.push("No line items were found.");
   if (!isoDate(p.issued_on)) warnings.push("No issue date was found. Enter it before saving.");
+  if (lines.length && lines.every((l) => !l.size && !l.quality))
+    warnings.push("This document does not list sizes or qualities. Add them by hand if you know them.");
+  const paid = num(p.amount_paid) ?? 0, bal = num(p.balance_due);
+  if (stated != null && bal != null && Math.abs(stated - paid - bal) > 1)
+    warnings.push("Total, amount paid and balance due do not add up. Check them.");
 
   const type = san(p.doc_type).toLowerCase();
   return {
     doc_type: type === "invoice" ? "invoice" : type === "quotation" ? "quotation" : "other",
     doc_number: san(p.doc_number), issued_on: isoDate(p.issued_on), second_date: isoDate(p.valid_until_or_due_on),
     job_card: san(p.job_card), quotation_ref: san(p.quotation_ref),
-    client_name: san(p.client_name), client_contact: san(p.client_contact), client_email: san(p.client_email), client_address: san(p.client_address),
+    paid_on: isoDate(p.paid_on), amount_paid: paid, balance_due: bal,
+    client_name: [san(p.client_name), san(p.client_organisation)].filter(Boolean).join(", "), client_contact: san(p.client_contact), client_email: san(p.client_email), client_address: san(p.client_address),
     vat_pct: vat, total: stated, notes: san(p.notes), lines, warnings,
   };
 }
