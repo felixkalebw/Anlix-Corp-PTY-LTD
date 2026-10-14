@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation'
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, CartesianGrid, PieChart, Pie, Cell, LabelList, ComposedChart, Line } from 'recharts'
 import { useApp } from './Store'
 import { supabase } from '@/lib/supabase'
+import { isCompleted } from './Invoice'
 import { TODAY, f2, f0, pc, fd, sum, sz, cost, price, qty, calc, unit, alerts, snapshot, costParts, jobNo, materialPlan, COST_N, STAGES, mkStages, isDone, progress, overdue, phase, phaseTag } from '@/lib/model'
 
 const Head = ({ title, sub }) => {
@@ -32,12 +33,13 @@ const Num = ({ label, value, onSave, ro }) => (
 function OrdersTable({ list }) {
   const { S } = useApp()
   return (
-    <Table head={['Job card', 'Date', 'Due', 'Placed by', 'Entity', 'Shirts', 'Net total', 'Balance', 'Progress', 'Status']} right={5}>
+    <Table head={['Job card', 'Date', 'Due', 'Placed by', 'Entity', 'Shirts', 'Net total', 'Balance', 'Progress', 'Status', 'Invoice']} right={5}>
       {list.map((o) => { const c = calc(S, o), p = progress(o); return (
         <tr key={o.jc}><td><Link href={'/orders/' + o.jc}>{o.jc}</Link></td><td>{fd(o.date)}</td>
           <td style={overdue(o) ? { color: 'var(--warn)', fontWeight: 600 } : undefined}>{o.dueDate ? fd(o.dueDate) : '–'}</td><td>{o.placed}</td><td>{o.ent}</td>
           <td className="r">{c.q}</td><td className="r">{f2(c.net)}</td><td className="r">{f2(c.bal)}</td>
-          <td style={{ minWidth: 90 }}><div className="mt" title={p + '%'}><div className="mb" style={{ width: p + '%' }} /></div></td><td><Tag o={o} /></td></tr>
+          <td style={{ minWidth: 90 }}><div className="mt" title={p + '%'}><div className="mb" style={{ width: p + '%' }} /></div></td><td><Tag o={o} /></td>
+          <td>{isCompleted(S, o) ? <Link href={`/orders/${o.jc}/invoice`}>{o.inv}</Link> : '–'}</td></tr>
       ) })}
     </Table>
   )
@@ -404,7 +406,10 @@ export function Job() {
   return (
     <>
       <div className="top"><div><h1>Job card {o.jc}</h1><div className="chips" style={{ marginTop: 8 }}><span className="tag b">{o.qt}</span><span className="tag b">{o.inv}</span><Tag o={o} />{overdue(o) && <span className="tag a">Overdue</span>}</div></div>
-        <button className="btn o" onClick={() => window.print()}>Print job card</button></div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {isCompleted(S, o) && <Link className="btn" href={`/orders/${o.jc}/invoice`}>View invoice</Link>}
+          <button className="btn o" onClick={() => window.print()}>Print job card</button>
+        </div></div>
       {o.stages && o.stages.length > 0 && <div><div className="mt"><div className="mb" style={{ width: pr + '%' }} /></div><div className="sub">{pr}% of production stages complete</div></div>}
       <div className="grid">
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
