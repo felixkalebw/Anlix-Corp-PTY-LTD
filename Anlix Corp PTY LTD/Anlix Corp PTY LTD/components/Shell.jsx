@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation'
 import { useApp } from './Store'
 import { supabase } from '@/lib/supabase'
 
-const NAV = [['/', 'Dashboard'], ['/orders', 'Orders'], ['/new', 'New order'], ['/payments', 'Payments'], ['/costing', 'Costing and prices'], ['/overheads', 'Overheads'], ['/audit', 'Audit log'], ['/data', 'Data and backups'], ['/ai', 'AI assistant']]
+const NAV = [['/', 'Dashboard'], ['/orders', 'Orders'], ['/new', 'New order'], ['/payments', 'Payments'], ['/costing', 'Costing and prices'], ['/overheads', 'Overheads'], ['/audit', 'Audit log'], ['/ai', 'AI assistant']]
 
 function SignIn() {
   const [email, setEmail] = useState(''), [pass, setPass] = useState(''), [err, setErr] = useState('')
