@@ -58,6 +58,8 @@ function ApproveForm({ s, pass, onSubmit, blocked }) {
   )
 }
 
+const chk = { width: 20, height: 20, minHeight: 0, margin: 0, flex: '0 0 auto' }
+
 function ReworkForm({ s, fail, o, base, net, onSubmit }) {
   const { S } = useApp()
   const [f, setF] = useState({ what: '', happened: '', whoType: RESP_TYPES[0], who: '', qty: '', mat: '', lab: '', oth: '', fault: FAULTS[0] })
@@ -77,6 +79,7 @@ function ReworkForm({ s, fail, o, base, net, onSubmit }) {
   const autoWhat = picked.length ? picked.map((x) => `${x.q} × ${lbl(x.l)}`).join('; ') + ` (${f.fault.toLowerCase()})` : ''
   const what = f.what.trim() || autoWhat
   const ok = what && f.happened.trim() && f.who.trim()
+  const missing = [!what && 'what is being reworked (tick a shirt or type it)', !f.happened.trim() && '"What happened"', !f.who.trim() && 'the name of who is responsible'].filter(Boolean)
   const after = base - est
   const togglePick = (i, l) => setPick((p) => ({ ...p, [i]: p[i] ? 0 : 1 }))
   return (
@@ -91,13 +94,13 @@ function ReworkForm({ s, fail, o, base, net, onSubmit }) {
         <div style={{ maxHeight: 220, overflowY: 'auto', border: '1px solid var(--line, #e5e7eb)', borderRadius: 8 }}>
           {(o.lines || []).map((l, i) => { const on = !!(+pick[i] > 0); return (
             <label key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderBottom: '1px solid var(--line, #eee)', cursor: 'pointer' }}>
-              <input type="checkbox" checked={on} onChange={() => togglePick(i, l)} />
+              <input type="checkbox" checked={on} onChange={() => togglePick(i, l)} style={chk} />
               <span style={{ flex: 1 }}>{lbl(l)}</span>
-              {l.q > 1 && <span className="sub" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>Qty <input type="number" min="0" max={l.q} value={on ? pick[i] : 0} disabled={!on} style={{ width: 64 }} onChange={(e) => setPick({ ...pick, [i]: Math.min(l.q, Math.max(0, parseInt(e.target.value) || 0)) })} /> of {l.q}</span>}
+              {l.q > 1 && <span className="sub" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>Qty <input type="number" min="0" max={l.q} value={on ? pick[i] : 0} disabled={!on} style={{ width: 64, minHeight: 34, margin: 0 }} onChange={(e) => setPick({ ...pick, [i]: Math.min(l.q, Math.max(0, parseInt(e.target.value) || 0)) })} /> of {l.q}</span>}
             </label>) })}
         </div>
       </div>
-      <label style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '6px 0 10px' }}><input type="checkbox" checked={remake} onChange={(e) => setRemake(e.target.checked)} /> Remake the shirt(s) from scratch: cost them at full production cost</label>
+      <label style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '6px 0 10px' }}><input type="checkbox" checked={remake} onChange={(e) => setRemake(e.target.checked)} style={chk} /> Remake the shirt(s) from scratch: cost them at full production cost</label>
       <div className="ps-row">
         <Field label="What is being reworked" wide><input value={f.what} onChange={set('what')} placeholder={autoWhat || 'e.g. 12 size L shirts with crooked front print'} /></Field>
         {!picked.length && <Field label="Shirts affected"><input type="number" min="0" value={f.qty} onChange={set('qty')} /></Field>}
@@ -117,6 +120,7 @@ function ReworkForm({ s, fail, o, base, net, onSubmit }) {
       <div className={'note' + (after < 0 ? ' w' : '')}>
         Profit on this order moves from <b>{f2(base)}</b> to <b>{f2(after)}</b>{net > 0 ? ` (margin ${pc(base / net)} to ${pc(after / net)})` : ''}.
       </div>
+      {!ok && <div className="note w">Still needed before you can raise this: {missing.join(', ')}.</div>}
       <button className="btn ps-warn" disabled={!ok} onClick={() => onSubmit({ ...f, what, qty: nPicked || f.qty, mat, lab, oth, remake, items: picked.map((x) => ({ s: x.l.s, colour: x.l.colour || '', desc: x.l.desc || '', q: x.q })), fail })}>{fail ? 'Fail inspection and raise rework' : 'Raise rework'}</button>
     </div>
   )
@@ -129,6 +133,22 @@ function SkipForm({ onSubmit }) {
       <div className="ps-form-h">Skip this stage</div>
       <Field label="Reason for skipping (required)" wide><input value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Customer supplied pre-printed fabric" /></Field>
       <button className="btn o" disabled={!note.trim()} onClick={() => onSubmit(note)}>Skip stage</button>
+    </div>
+  )
+}
+
+function ReopenForm({ s, blockedBy, onSubmit }) {
+  const [why, setWhy] = useState('')
+  return (
+    <div className="ps-form">
+      <div className="ps-form-h">Change this approved stage</div>
+      {blockedBy ? <div className="note w">{blockedBy}</div> : (
+        <>
+          <div className="sub">Reopens <b>{s.k}</b> so it can be corrected and approved again. The earlier approval stays in the activity log.</div>
+          <Field label="Reason for reopening (required)" wide><input value={why} onChange={(e) => setWhy(e.target.value)} placeholder="e.g. Count was wrong, one shirt was missing" /></Field>
+          <button className="btn ps-warn" disabled={!why.trim()} onClick={() => onSubmit(why)}>Reopen stage</button>
+        </>
+      )}
     </div>
   )
 }
@@ -182,8 +202,14 @@ function Step({ s, i, n, last, o, c, open, setOpen, base, act }) {
                 {m === 'rework' && !s.rw && <ReworkForm key={s.k + 'r'} s={s} fail={qc} o={o} base={base} net={c.net} onSubmit={(f) => { act(s.k, 'rework', f); setMode(null) }} />}
               </>
             )}
-            {s.st === 'done' && !s.rw && !qc && <div><button className="btn o" onClick={() => setMode(mode === 'rework' ? null : 'rework')}>Report rework on this stage</button></div>}
+            {s.st === 'done' && !s.rw && (
+              <div className="chips">
+                {!qc && <button className="btn o" onClick={() => setMode(mode === 'rework' ? null : 'rework')}>Report rework on this stage</button>}
+                <button className="btn o" onClick={() => setMode(mode === 'reopen' ? null : 'reopen')}>Change this approved stage</button>
+              </div>
+            )}
             {s.st === 'done' && !s.rw && !qc && m === 'rework' && <ReworkForm key={s.k + 'r2'} s={s} fail={false} o={o} base={base} net={c.net} onSubmit={(f) => { act(s.k, 'rework', f); setMode(null) }} />}
+            {s.st === 'done' && !s.rw && m === 'reopen' && <ReopenForm key={s.k + 'o'} s={s} blockedBy={(o.stages || []).slice(i + 1).some((x) => x.st !== 'pending') ? 'A later stage has already started, so this stage cannot be reopened. Use Report rework on this stage instead.' : ''} onSubmit={(reason) => { act(s.k, 'reopen', { reason }); setMode(null) }} />}
             {s.rw && <RwDetail rw={s.rw} />}
           </div>
         )}
@@ -215,7 +241,7 @@ export function ProductionStages() {
   const planned = c.gp, projected = c.gp - extra
   const prog = progress({ stages: st }), approved = st.filter((s) => s.st === 'done' && !s.rw).length, total = st.filter((s) => !s.rw).length
   const p = phase(S, o), cur = st.find((s) => !isDone(s)), shown = openKey === undefined ? (cur && cur.k) : openKey
-  const act = (k, op, x = {}) => { setOpenKey(undefined); dispatch({ type: op === 'rework' ? 'rework' : op === 'reworkDone' ? 'reworkDone' : 'stage', jc: o.jc, k, op, ...x, ...(op === 'reworkDone' ? { actual: x.actual } : {}) }) }
+  const act = (k, op, x = {}) => { setOpenKey(undefined); dispatch({ type: op === 'rework' ? 'rework' : op === 'reworkDone' ? 'reworkDone' : op === 'reopen' ? 'reopen' : 'stage', jc: o.jc, k, op, ...x, ...(op === 'reworkDone' ? { actual: x.actual } : {}) }) }
   const trail = S.audit.filter((a) => a.o === o.jc).slice(0, 8)
   const byType = RESP_TYPES.map((t) => [t, sum(rws.filter((s) => s.rw.whoType === t), (s) => +(s.rw.act ?? s.rw.est) || 0)]).filter(([, v]) => v > 0)
   const maxT = Math.max(...byType.map(([, v]) => v), 1)
