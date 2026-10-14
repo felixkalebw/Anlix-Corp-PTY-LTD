@@ -68,8 +68,37 @@ export const RESP_TYPES = ['Staff member', 'Supplier', 'Equipment or machine', '
 export const reworksOf = (o) => (o.stages || []).filter((s) => s.rw)
 export const reworkCost = (o) => reworksOf(o).reduce((t, s) => t + (+(s.rw.act ?? s.rw.est) || 0), 0)
 export const stageBlocked = (o, i) => (o.stages || []).slice(0, i).some((s) => !isDone(s))
-export const jobNo = (S) => `JC-${TODAY.slice(0, 4)}-${String(S.seq + 1).padStart(4, '0')}`
+// Next free job card number. Skips any number already used, so two staff can never end up with the same job card.
+export const nextSeq = (S) => { let n = S.seq + 1; while (S.orders.some((o) => o.jc === `JC-${TODAY.slice(0, 4)}-${String(n).padStart(4, '0')}`)) n++; return n }
+export const jobNo = (S) => `JC-${TODAY.slice(0, 4)}-${String(nextSeq(S)).padStart(4, '0')}`
 const now = () => new Date().toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
+
+// Fabric needed and production cost for a set of order lines, grouped by colour and fabric.
+// Fabric length = pattern height x quantity. Uses the same rates as cost(), so the total matches the order's production cost.
+export function materialPlan(S, lines) {
+  const groups = new Map()
+  let shirts = 0, metres = 0
+  lines.forEach((l) => {
+    const z = sz(S, l.s), q = +l.q || 0
+    if (!z || q <= 0) return
+    const colour = (l.colour || '').trim() || 'Colour not given', fabric = (l.fabric || '').trim()
+    const key = colour.toLowerCase() + '|' + fabric.toLowerCase()
+    const g = groups.get(key) || { colour, fabric, shirts: 0, metres: 0, by: {} }
+    const m = (q * z.h) / 1000
+    g.shirts += q; g.metres += m; g.by[z.n] = (g.by[z.n] || 0) + q
+    groups.set(key, g)
+    shirts += q; metres += m
+  })
+  const rows = [...groups.values()].map((g) => ({
+    ...g,
+    sizeText: S.sizes.filter((z) => g.by[z.n]).map((z) => `${g.by[z.n]} × ${z.n}`).join(', '),
+    fabricCost: g.metres * S.R.fabric,
+    cost: g.metres * (S.R.fabric + S.R.print + S.R.press) + g.shirts * S.R.sew,
+  })).sort((a, b) => a.colour.localeCompare(b.colour) || a.fabric.localeCompare(b.fabric))
+  const parts = { fabric: metres * S.R.fabric, print: metres * S.R.print, press: metres * S.R.press, sew: shirts * S.R.sew }
+  const total = parts.fabric + parts.print + parts.press + parts.sew
+  return { rows, shirts, metres, parts, total, avg: shirts ? total / shirts : 0 }
+}
 
 export function costParts(S, ord) {
   const jobs = ord.map((o) => {
@@ -88,13 +117,17 @@ export function reduce(S, a) {
     case 'load': return { ...initial(), ...a.state }
     case 'user': return { ...S, user: a.user }
     case 'register': {
-      const n = S.seq + 1, p = String(n).padStart(4, '0'), y = TODAY.slice(0, 4), q = a.lines.reduce((t, l) => t + l.q, 0)
-      const lines = a.lines.map((l) => { const z = sz(S, l.s); return { ...l, unitPrice: price(S, z, q), unitCost: cost(S, z) } })
-      const o = { jc: `JC-${y}-${p}`, qt: `QT-${y}-${p}`, inv: `INV-${y}-${p}`, date: TODAY, by: a.d.by, placed: a.d.placed.trim(), ent: a.d.ent.trim(), lines,
+      const n = nextSeq(S), p = String(n).padStart(4, '0'), y = TODAY.slice(0, 4)
+      const by = String(a.d.by || '').trim() // the staff member taking the order is required
+      const ok = (a.lines || []).filter((l) => sz(S, l.s) && l.q > 0)
+      if (!by || !ok.length) return S
+      const q = ok.reduce((t, l) => t + l.q, 0)
+      const lines = ok.map((l) => { const z = sz(S, l.s); return { s: l.s, q: l.q, colour: (l.colour || '').trim(), fabric: (l.fabric || '').trim(), desc: (l.desc || '').trim(), unitPrice: num(l.unitPrice) ? +l.unitPrice : price(S, z, q), unitCost: cost(S, z) } })
+      const o = { jc: `JC-${y}-${p}`, qt: `QT-${y}-${p}`, inv: `INV-${y}-${p}`, date: TODAY, by, placed: a.d.placed.trim(), ent: a.d.ent.trim(), lines,
         dt: a.d.dt, dv: +a.d.dv || 0, dr: a.d.dr, pays: [], prod: false, prodStatus: 'Awaiting production', priority: 'Normal', dueDate: a.d.dueDate || '', phone: (a.d.phone || '').trim(), stages: mkStages(), createdAt: new Date().toISOString() }
-      const e = [log(`Job card ${o.jc} created, linked to ${o.qt} and ${o.inv}`, o.jc, a.d.by)]
-      if (o.dv > 0) e.push(log(`Discount ${o.dt === '%' ? o.dv + '%' : f2(o.dv)} applied: ${o.dr}`, o.jc, a.d.by))
-      return { ...add(...e), seq: n, user: a.d.by, orders: [...S.orders, o] }
+      const e = [log(`Job card ${o.jc} created by ${by}, linked to ${o.qt} and ${o.inv}`, o.jc, by)]
+      if (o.dv > 0) e.push(log(`Discount ${o.dt === '%' ? o.dv + '%' : f2(o.dv)} applied: ${o.dr}`, o.jc, by))
+      return { ...add(...e), seq: n, orders: [...S.orders, o] }
     }
     case 'pay': {
       if (!(a.amt > 0)) return S
