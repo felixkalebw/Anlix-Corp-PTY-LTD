@@ -1,5 +1,5 @@
-import { Dashboard } from '@/components/screens'
+import { Data } from '@/components/screens'
 
 export default function Page() {
-  return <Dashboard />
+  return <Data />
 }
