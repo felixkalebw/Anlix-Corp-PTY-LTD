@@ -1,7 +1,6 @@
 "use client";
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
-import Link from "next/link";
-import { supabase } from "@/lib/supabaseClient";
+import { supabase, hasSupabase } from "@/lib/supabaseClient";
 import AuthGate from "./AuthGate";
 import "./auth.css";
 
@@ -19,6 +18,7 @@ export default function AuthProvider({ children }) {
   const [recovery, setRecovery] = useState(false);
 
   const load = useCallback(async () => {
+    if (!hasSupabase) return setState({ loading: false, user: null, access: null });
     const { data: s } = await supabase.auth.getSession();
     if (!s.session) return setState({ loading: false, user: null, access: null });
     const { data, error } = await supabase.rpc("my_access");
@@ -27,6 +27,7 @@ export default function AuthProvider({ children }) {
 
   useEffect(() => {
     load();
+    if (!hasSupabase) return;
     const { data } = supabase.auth.onAuthStateChange((event) => {
       if (event === "PASSWORD_RECOVERY") setRecovery(true);
       setTimeout(load, 0); // don't call Supabase inside the callback itself
@@ -48,6 +49,14 @@ export default function AuthProvider({ children }) {
     return load();
   };
 
+  // No Supabase env vars: local-only mode, no sign-in and everything allowed
+  if (!hasSupabase)
+    return (
+      <Ctx.Provider value={{ user: null, access: null, role: "super_admin", can: () => true, signOut() {}, refresh() {} }}>
+        {children}
+      </Ctx.Provider>
+    );
+
   if (state.loading) return <div className="ax-loading">Loading...</div>;
   if (recovery || !approved)
     return <AuthGate user={user} access={access} recovery={recovery} onDone={refresh} signOut={signOut} />;
@@ -55,11 +64,6 @@ export default function AuthProvider({ children }) {
   return (
     <Ctx.Provider value={{ user, access, role, can, signOut, refresh }}>
       {children}
-      <div id="ax-bar">
-        {access.full_name || user.email} · {role}
-        {can("staff.manage") && <Link href="/admin/staff">Staff</Link>}
-        <button onClick={signOut}>Sign out</button>
-      </div>
     </Ctx.Provider>
   );
 }
