@@ -64,6 +64,8 @@ export function phase(S, o) {
   return 'In production'
 }
 export const phaseTag = (p) => (p === 'Completed' || p === 'Ready for collection' ? 'g' : /^Awaiting|hold|pending/.test(p) ? 'a' : 'b')
+export const FAULTS = ['Missing shirt', 'Print defect', 'Stitching defect', 'Wrong size', 'Damaged', 'Other']
+export const REMAKE_FAULTS = ['Missing shirt', 'Wrong size', 'Damaged']
 export const RESP_TYPES = ['Staff member', 'Supplier', 'Equipment or machine', 'Customer change', 'Process or instruction', 'Other']
 export const reworksOf = (o) => (o.stages || []).filter((s) => s.rw)
 export const reworkCost = (o) => reworksOf(o).reduce((t, s) => t + (+(s.rw.act ?? s.rw.est) || 0), 0)
@@ -177,9 +179,11 @@ export function reduce(S, a) {
       const mat = Math.max(0, +a.mat || 0), lab = Math.max(0, +a.lab || 0), oth = Math.max(0, +a.oth || 0), est = +(mat + lab + oth).toFixed(2)
       if (src.rw || !what || !happened || !who || !RESP_TYPES.includes(a.whoType)) return S
       if (a.fail ? !(a.k === STAGES[4] && src.st === 'active') : !(src.st === 'active' || src.st === 'done')) return S
+      const items = (Array.isArray(a.items) ? a.items : []).map((x) => ({ s: String(x.s || '').slice(0, 20), colour: String(x.colour || '').slice(0, 60), desc: String(x.desc || '').slice(0, 120), q: Math.max(0, parseInt(x.q) || 0) })).filter((x) => x.q > 0 && sz(S, x.s)).slice(0, 200)
+      const fault = FAULTS.includes(a.fault) ? a.fault : 'Other'
       const n = st.filter((x) => x.rw).length + 1, id = `RW-${o.jc.slice(3)}-${n}`
       if (a.fail) { src.st = 'pending'; src.result = 'Fail'; src.fails = (src.fails || 0) + 1; src.by = S.user }
-      const rw = { id, from: src.k, what, happened, who, whoType: a.whoType, qty: Math.max(0, parseInt(a.qty) || 0), mat, lab, oth, est, raisedBy: S.user, raisedAt: t, found: a.fail ? 'Quality inspection' : src.k }
+      const rw = { id, from: src.k, what, happened, who, whoType: a.whoType, fault, remake: !!a.remake, items, qty: items.length ? sum(items, (x) => x.q) : Math.max(0, parseInt(a.qty) || 0), mat, lab, oth, est, raisedBy: S.user, raisedAt: t, found: a.fail ? 'Quality inspection' : src.k }
       // a failed inspection sends the job back before the inspection point; other rework sits straight after the stage it came from
       st.splice(a.fail ? i : i + 1, 0, { k: `Rework ${n}: ${src.k}`, st: 'active', start: t, by: S.user, rw })
       const fin = { id, date: TODAY, category: 'Wastage and rework', desc: `${src.k}: ${what} (responsible: ${who}, ${a.whoType})`, amount: est, ref: o.jc, by: S.user }
