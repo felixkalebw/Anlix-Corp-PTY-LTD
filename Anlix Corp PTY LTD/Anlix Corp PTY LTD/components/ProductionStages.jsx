@@ -3,7 +3,7 @@ import { useState } from 'react'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import { useApp } from './Store'
-import { f2, fd, pc, calc, progress, isDone, overdue, phase, phaseTag, mkStages, STAGES, RESP_TYPES, reworksOf, reworkCost, stageBlocked, sum } from '@/lib/model'
+import { f2, fd, pc, calc, progress, isDone, overdue, phase, phaseTag, mkStages, STAGES, RESP_TYPES, reworksOf, reworkCost, stageBlocked, sum, sz, FAULTS, REMAKE_FAULTS } from '@/lib/model'
 
 const when = (t) => (t ? new Date(t).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '–')
 const span = (a, b) => {
@@ -60,18 +60,47 @@ function ApproveForm({ s, pass, onSubmit, blocked }) {
 
 function ReworkForm({ s, fail, o, base, net, onSubmit }) {
   const { S } = useApp()
-  const [f, setF] = useState({ what: '', happened: '', whoType: RESP_TYPES[0], who: '', qty: '', mat: '', lab: '', oth: '' })
+  const [f, setF] = useState({ what: '', happened: '', whoType: RESP_TYPES[0], who: '', qty: '', mat: '', lab: '', oth: '', fault: FAULTS[0] })
+  const [pick, setPick] = useState({}), [remake, setRemake] = useState(true)
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value })
-  const est = (+f.mat || 0) + (+f.lab || 0) + (+f.oth || 0)
-  const ok = f.what.trim() && f.happened.trim() && f.who.trim()
+  const setFault = (e) => { setF({ ...f, fault: e.target.value }); setRemake(REMAKE_FAULTS.includes(e.target.value)) }
+  const r2 = (n) => +(+n || 0).toFixed(2)
+  // the shirts chosen from this order, one row per order line (a pasted named list has one line per person)
+  const picked = (o.lines || []).map((l, i) => ({ l, i, q: Math.min(l.q, Math.max(0, parseInt(pick[i]) || 0)) })).filter((x) => x.q > 0)
+  const nPicked = sum(picked, (x) => x.q)
+  // a remade shirt costs fabric + printing + pressing by its size, plus sewing: the same rates the order was costed with
+  const autoMat = remake ? r2(sum(picked, (x) => x.q * (sz(S, x.l.s).h / 1000) * (S.R.fabric + S.R.print + S.R.press))) : 0
+  const autoLab = remake ? r2(sum(picked, (x) => x.q * S.R.sew)) : 0
+  const mat = f.mat === '' ? autoMat : +f.mat || 0, lab = f.lab === '' ? autoLab : +f.lab || 0, oth = +f.oth || 0
+  const est = r2(mat + lab + oth)
+  const lbl = (l) => [l.s, l.colour, l.desc || 'T-shirt'].filter(Boolean).join(' · ')
+  const autoWhat = picked.length ? picked.map((x) => `${x.q} × ${lbl(x.l)}`).join('; ') + ` (${f.fault.toLowerCase()})` : ''
+  const what = f.what.trim() || autoWhat
+  const ok = what && f.happened.trim() && f.who.trim()
   const after = base - est
+  const togglePick = (i, l) => setPick((p) => ({ ...p, [i]: p[i] ? 0 : 1 }))
   return (
     <div className="ps-form ps-form-w">
       <div className="ps-form-h">{fail ? 'Fail inspection and raise rework' : 'Report rework needed'}</div>
       <div className="sub" style={{ marginBottom: 10 }}>Found at: <b>{s.k}</b>. Every field is required so the cost and the cause are on record.</div>
       <div className="ps-row">
-        <Field label="What is being reworked" wide><input value={f.what} onChange={set('what')} placeholder="e.g. 12 size L shirts with crooked front print" /></Field>
-        <Field label="Shirts affected"><input type="number" min="0" value={f.qty} onChange={set('qty')} /></Field>
+        <Field label="What went wrong"><select value={f.fault} onChange={setFault}>{FAULTS.map((x) => <option key={x}>{x}</option>)}</select></Field>
+      </div>
+      <div style={{ margin: '10px 0' }}>
+        <div className="sub" style={{ marginBottom: 6 }}>Tick the shirts affected (size, colour and name come from the order){nPicked ? ` · ${nPicked} selected` : ''}</div>
+        <div style={{ maxHeight: 220, overflowY: 'auto', border: '1px solid var(--line, #e5e7eb)', borderRadius: 8 }}>
+          {(o.lines || []).map((l, i) => { const on = !!(+pick[i] > 0); return (
+            <label key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderBottom: '1px solid var(--line, #eee)', cursor: 'pointer' }}>
+              <input type="checkbox" checked={on} onChange={() => togglePick(i, l)} />
+              <span style={{ flex: 1 }}>{lbl(l)}</span>
+              {l.q > 1 && <span className="sub" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>Qty <input type="number" min="0" max={l.q} value={on ? pick[i] : 0} disabled={!on} style={{ width: 64 }} onChange={(e) => setPick({ ...pick, [i]: Math.min(l.q, Math.max(0, parseInt(e.target.value) || 0)) })} /> of {l.q}</span>}
+            </label>) })}
+        </div>
+      </div>
+      <label style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '6px 0 10px' }}><input type="checkbox" checked={remake} onChange={(e) => setRemake(e.target.checked)} /> Remake the shirt(s) from scratch: cost them at full production cost</label>
+      <div className="ps-row">
+        <Field label="What is being reworked" wide><input value={f.what} onChange={set('what')} placeholder={autoWhat || 'e.g. 12 size L shirts with crooked front print'} /></Field>
+        {!picked.length && <Field label="Shirts affected"><input type="number" min="0" value={f.qty} onChange={set('qty')} /></Field>}
       </div>
       <Field label="What happened" wide><textarea value={f.happened} onChange={set('happened')} placeholder="Describe the defect and how it came about" /></Field>
       <div className="ps-row">
@@ -79,15 +108,16 @@ function ReworkForm({ s, fail, o, base, net, onSubmit }) {
         <Field label="Name of person or party responsible"><input value={f.who} onChange={set('who')} placeholder="e.g. Thabo, Press operator" /></Field>
       </div>
       <div className="ps-row ps-cost">
-        <Field label="Extra material, P"><input type="number" min="0" step="any" value={f.mat} onChange={set('mat')} /></Field>
-        <Field label="Extra labour, P"><input type="number" min="0" step="any" value={f.lab} onChange={set('lab')} /></Field>
+        <Field label="Extra material, P"><input type="number" min="0" step="any" value={f.mat !== '' ? f.mat : autoMat ? autoMat.toFixed(2) : ''} onChange={set('mat')} /></Field>
+        <Field label="Extra labour, P"><input type="number" min="0" step="any" value={f.lab !== '' ? f.lab : autoLab ? autoLab.toFixed(2) : ''} onChange={set('lab')} /></Field>
         <Field label="Other costs, P"><input type="number" min="0" step="any" value={f.oth} onChange={set('oth')} /></Field>
         <div className="ps-est"><span className="sub">Rework cost to the company</span><b>{f2(est)}</b></div>
       </div>
+      {remake && picked.length > 0 && <div className="sub" style={{ margin: '6px 0' }}>Material and labour are filled in from the order's rates (fabric, printing, pressing and sewing by size). You can type over them.</div>}
       <div className={'note' + (after < 0 ? ' w' : '')}>
         Profit on this order moves from <b>{f2(base)}</b> to <b>{f2(after)}</b>{net > 0 ? ` (margin ${pc(base / net)} to ${pc(after / net)})` : ''}.
       </div>
-      <button className="btn ps-warn" disabled={!ok} onClick={() => onSubmit({ ...f, fail })}>{fail ? 'Fail inspection and raise rework' : 'Raise rework'}</button>
+      <button className="btn ps-warn" disabled={!ok} onClick={() => onSubmit({ ...f, what, qty: nPicked || f.qty, mat, lab, oth, remake, items: picked.map((x) => ({ s: x.l.s, colour: x.l.colour || '', desc: x.l.desc || '', q: x.q })), fail })}>{fail ? 'Fail inspection and raise rework' : 'Raise rework'}</button>
     </div>
   )
 }
@@ -165,7 +195,8 @@ function Step({ s, i, n, last, o, c, open, setOpen, base, act }) {
 function RwDetail({ rw }) {
   return (
     <dl className="ps-dl">
-      <div><dt>What is being reworked</dt><dd>{rw.what}{rw.qty ? ` · ${rw.qty} shirts` : ''}</dd></div>
+      <div><dt>What is being reworked</dt><dd>{rw.fault ? <span className="tag a">{rw.fault}</span> : null} {rw.what}{rw.qty ? ` · ${rw.qty} shirt${rw.qty > 1 ? 's' : ''}` : ''}</dd></div>
+      {rw.items?.length > 0 && <div><dt>Shirts</dt><dd>{rw.items.map((x, i) => <div key={i}>{x.q} × {[x.s, x.colour, x.desc || 'T-shirt'].filter(Boolean).join(' · ')}</div>)}</dd></div>}
       <div><dt>What happened</dt><dd>{rw.happened}</dd></div>
       <div><dt>Responsible</dt><dd>{rw.who} <span className="tag a">{rw.whoType}</span></dd></div>
       <div><dt>Cost</dt><dd>Material {f2(rw.mat)} · Labour {f2(rw.lab)} · Other {f2(rw.oth)} = <b>{f2(rw.est)}</b>{rw.act !== undefined && rw.act !== rw.est ? <> · actual <b>{f2(rw.act)}</b></> : null}</dd></div>
@@ -246,7 +277,7 @@ export function ProductionStages() {
                     {rws.map((x) => { const rw = x.rw, rs = x.st; return (
                       <div key={rw.id} className="ps-rwi">
                         <div className="ps-rwh"><b>{rw.id}</b><span className={'tag ' + (rs === 'done' ? 'g' : 'a')}>{rs === 'done' ? 'Resolved' : 'Open'}</span></div>
-                        <div>{rw.what}</div>
+                        <div>{rw.fault ? <b>{rw.fault}: </b> : null}{rw.what}</div>
                         <div className="sub">{rw.found}: {rw.happened}</div>
                         <div className="ps-rwf"><span>{rw.who} · {rw.whoType}</span><b>{f2(rw.act ?? rw.est)}</b></div>
                       </div>
