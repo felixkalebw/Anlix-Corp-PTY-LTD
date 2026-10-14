@@ -191,6 +191,19 @@ export function reduce(S, a) {
       return { ...add(log(`Rework ${id} raised at "${src.k}": ${what}. What happened: ${happened}. Responsible: ${who} (${a.whoType}). Estimated cost ${f2(est)}${a.fail ? '. Inspection failed' : ''}`, a.jc)),
         finance: [...(S.finance || []), fin], orders: S.orders.map((x) => (x.jc === a.jc ? { ...x, stages: st, prodStatus: next ? next.k : 'Packed' } : x)) }
     }
+    case 'reopen': {
+      const o = S.orders.find((x) => x.jc === a.jc)
+      if (!o || !o.prod || o.closed) return S
+      const t = new Date().toISOString(), st = (o.stages || []).map((s) => ({ ...s }))
+      const i = st.findIndex((x) => x.k === a.k), s = st[i], why = (a.reason || '').trim()
+      if (!s || s.rw || !isDone(s) || !why) return S
+      if (st.slice(i + 1).some((x) => x.st !== 'pending')) return S // a later stage has already started
+      const was = s.appr ? s.appr.by : ''
+      s.st = 'active'; s.end = undefined; s.appr = undefined; s.result = undefined; s.by = S.user
+      s.reopened = (s.reopened || 0) + 1
+      return { ...add(log(`Stage \"${a.k}\" reopened for changes${was ? ` (was approved by ${was})` : ''}: ${why}`, a.jc)),
+        orders: S.orders.map((x) => (x.jc === a.jc ? { ...x, stages: st, prodStatus: s.k } : x)) }
+    }
     case 'reworkDone': {
       const o = S.orders.find((x) => x.jc === a.jc)
       if (!o || !o.prod || o.closed) return S
