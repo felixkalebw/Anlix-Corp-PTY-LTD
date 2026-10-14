@@ -248,24 +248,17 @@ const ST_TAG = { pending: '', active: 'b', done: 'g', skipped: '' }
 const when = (t) => (t ? new Date(t).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '')
 
 function Production({ o, c }) {
-  const { dispatch } = useApp()
-  const st = o.stages && o.stages.length ? o.stages : mkStages()
-  const reworking = st.some((s) => /^Rework/.test(s.k) && s.st === 'active')
-  const act = (k, op) => dispatch({ type: 'stage', jc: o.jc, k, op })
+  const st = o.stages && o.stages.length ? o.stages : mkStages(), rw = st.filter((s) => s.rw), pr = progress({ stages: st })
   return (
     <div className="card"><h2>Production stages</h2>
       {!o.prod ? <div className="note w">Stages unlock once the required payment is recorded and the job is moved to production.</div> : (
-        <Table head={['Stage', 'Status', 'By', 'Started', 'Finished', '']}>
-          {st.map((s) => { const qc = s.k === STAGES[4], fin = s.k === STAGES[6]; return (
-            <tr key={s.k}><td>{s.k}{s.fails ? <span className="sub"> · failed {s.fails}×</span> : null}</td>
-              <td><span className={'tag ' + (ST_TAG[s.st] || '')}>{s.st}{s.result ? ' · ' + s.result : ''}</span></td><td>{s.by || ''}</td><td>{when(s.start)}</td><td>{when(s.end)}</td>
-              <td>{s.st === 'pending' && <><button className="btn o" disabled={qc && reworking} onClick={() => act(s.k, 'start')}>Start</button>{!qc && !fin && <> <button className="btn o" onClick={() => act(s.k, 'skip')}>Skip</button></>}</>}
-                {s.st === 'active' && (qc ? <><button className="btn o" onClick={() => act(s.k, 'pass')}>Pass</button> <button className="btn o" onClick={() => act(s.k, 'fail')}>Fail</button></>
-                  : <button className="btn o" disabled={fin && c.bal > 0.005} onClick={() => act(s.k, 'done')}>Complete</button>)}</td></tr>) })}
-        </Table>)}
-      {o.closed ? <div className="note">Closed {when(o.closed.at)}. Revenue {f2(o.closed.revenue)}, total cost {f2(o.closed.cost)}, actual profit {f2(o.closed.profit)} ({o.closed.revenue ? pc(o.closed.profit / o.closed.revenue) : '–'}).</div>
-        : o.prod && <p><button className="btn" disabled={!st.every(isDone) || c.bal > 0.005} onClick={() => dispatch({ type: 'close', jc: o.jc })}>Close order and calculate profit</button></p>}
-      {o.prod && !o.closed && c.bal > 0.005 && <div className="sub">Final payment must be received before the order can be closed.</div>}
+        <>
+          <div className="mt"><div className="mb" style={{ width: pr + '%' }} /></div>
+          <div className="sub" style={{ margin: '6px 0 10px' }}>{st.filter(isDone).length} of {st.length} stages approved{rw.length ? ` · ${rw.length} rework, ${f2(rw.reduce((t, s) => t + (+(s.rw.act ?? s.rw.est) || 0), 0))}` : ''}</div>
+          <div className="log">{st.map((s) => <div key={s.k}>{s.k}<span>{s.st}{s.appr ? ' · approved by ' + s.appr.by : ''}</span></div>)}</div>
+        </>)}
+      {o.closed ? <div className="note">Closed {when(o.closed.at)}. Revenue {f2(o.closed.revenue)}, total cost {f2(o.closed.cost)}, actual profit {f2(o.closed.profit)} ({o.closed.revenue ? pc(o.closed.profit / o.closed.revenue) : '–'}).</div> : null}
+      {o.prod && <p><Link className="btn" href={'/orders/' + o.jc + '/production'} style={{ display: 'inline-flex', alignItems: 'center', color: '#fff', textDecoration: 'none' }}>Open production stages</Link></p>}
     </div>
   )
 }
