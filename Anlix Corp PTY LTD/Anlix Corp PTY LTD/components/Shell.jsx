@@ -4,8 +4,9 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useApp } from './Store'
 import { supabase } from '@/lib/supabase'
+import { useAuth } from '@/components/AuthProvider'
 
-const NAV = [['/', 'Dashboard'], ['/orders', 'Orders'], ['/new', 'New order'], ['/payments', 'Payments'], ['/costing', 'Costing and prices'], ['/overheads', 'Overheads'], ['/audit', 'Audit log'], ['/data', 'Data and backups'], ['/ai', 'AI assistant']]
+const NAV = [['/', 'Dashboard'], ['/orders', 'Orders'], ['/new', 'New order'], ['/payments', 'Payments'], ['/app/documents', 'Quotations & invoices', 'documents.view'], ['/costing', 'Costing and prices'], ['/overheads', 'Overheads'], ['/audit', 'Audit log'], ['/data', 'Data and backups'], ['/ai', 'AI assistant'], ['/admin/staff', 'Staff access', 'staff.manage']]
 
 function SignIn() {
   const [email, setEmail] = useState(''), [pass, setPass] = useState(''), [err, setErr] = useState('')
@@ -29,13 +30,14 @@ function SignIn() {
 
 export default function Shell({ children }) {
   const { cloud, session, sync, ready } = useApp()
+  const { can } = useAuth()
   const path = usePathname()
   if (cloud && !session) return <SignIn />
   return (
     <div className="app">
       <nav className="side" aria-label="Main">
         <div className="brand">Anlix Corp</div>
-        {NAV.map(([h, t]) => (
+        {NAV.filter(([, , perm]) => !perm || can(perm)).map(([h, t]) => (
           <Link key={h} href={h} className={'nv' + (path === h || (h === '/orders' && path.startsWith('/orders/')) ? ' on' : '')}>{t}</Link>
         ))}
         <div className="sub" style={{ padding: '12px', color: 'var(--sink)' }}>{sync}</div>
