@@ -19,14 +19,14 @@ const num = (v) => {
 
 const system = (sizes) => `You read pasted order details for Anlix Corp, a T-shirt and clothing printing business in Botswana, and return JSON only.
 The allowed sizes are exactly: ${sizes.join(", ")}.
-Return ONLY a JSON object: {"lines":[{"size":"","colour":"","description":"","qty":0,"unit_price":null}],"warnings":[""]}
+Return ONLY a JSON object: {"lines":[{"size":"","colour":"","description":"","name":"","qty":0,"unit_price":null}],"warnings":[""]}
 Rules:
-- One line per size and colour combination. Never merge different sizes or colours. Add up the quantities of the same size, colour and garment.
+- If the text lists people (names and/or numbers, each with a size), return ONE line per person, in the same order as the list, with qty 1. Never group people by size or colour. Put the person's name and number exactly as written (fix only obvious spacing) in "name", for example "BBE FLOWZAH 69" or "K Galeragwe 03". A title or heading line (for example "Replica 2026 2nd batch") is not a person. Skip it.
+- Otherwise (no people listed), use one line per size and colour combination and add up the quantities of the same size, colour and garment. Never merge different sizes or colours.
 - "size" must be exactly one of the allowed sizes. Convert wording: extra small = XS, small = S, medium = M, large = L, extra large = XL, double extra large or XXL = 2XL, XXXL = 3XL, XXXXL = 4XL. For children, use the allowed kids size that covers the age or size written (for example age 8 or "kids 8" means the size range that includes 8). If you cannot match a size, use an empty string and add a warning that quotes the text.
 - "colour" is the garment colour in plain words with a capital letter, for example Black or Royal blue. If none is written, use an empty string.
 - "fabric" is the material of the garment, for example Cotton, Polyester or Dry-fit, only when the text says it. Otherwise use an empty string.
-- "description" is the garment, for example T-shirt, Golf shirt, Long sleeve shirt, Tracksuit, Shorts or Socks. Use T-shirt when the text does not say.
-- If the text lists people, for example names and numbers with a size each, count each person as quantity 1 and add up by size and colour. Ignore names and numbers.
+- "description" is the garment only (the name goes in "name"), for example T-shirt, Golf shirt, Long sleeve shirt, Tracksuit, Shorts or Socks. Use T-shirt when the text does not say.
 - "qty" is a whole number. If a quantity is missing, use 1 and add a warning.
 - "unit_price" is a plain number only when a price per item is written, otherwise null.
 - Never invent anything. Put anything unclear in "warnings".`;
@@ -78,20 +78,25 @@ function tidy(p, sizes) {
   const warnings = (Array.isArray(p.warnings) ? p.warnings : []).map(san).filter(Boolean);
   const byLower = new Map(sizes.map((s) => [s.toLowerCase(), s]));
   const map = new Map();
+  let seq = 0;
   for (const l of Array.isArray(p.lines) ? p.lines : []) {
     const raw = san(l.size);
     const size = byLower.get(raw.toLowerCase()) || byLower.get((ALIAS[raw.toLowerCase()] || "").toLowerCase()) || "";
     if (raw && !size) warnings.push(`Size "${raw}" is not in the tracker's size list. Pick the right size by hand.`);
     const qty = Math.max(0, Math.round(num(l.qty) ?? 0));
     if (!qty) continue;
-    const colour = cap(san(l.colour)), fabric = cap(san(l.fabric)), description = san(l.description) || "T-shirt";
-    const key = [size, colour.toLowerCase(), fabric.toLowerCase(), description.toLowerCase()].join("|");
+    const colour = cap(san(l.colour)), fabric = cap(san(l.fabric)), garment = san(l.description) || "T-shirt", name = san(l.name);
+    // A named line is one person's shirt: it gets its own row and the name sits in the description. It is never merged.
+    const description = name ? `${garment} - ${name}` : garment;
+    const key = name ? `person|${seq++}` : [size, colour.toLowerCase(), fabric.toLowerCase(), description.toLowerCase()].join("|");
     const prev = map.get(key);
     if (prev) prev.qty += qty;
-    else map.set(key, { size, colour, fabric, description, qty, unit_price: num(l.unit_price) });
+    else map.set(key, { size, colour, fabric, description, qty, unit_price: num(l.unit_price), named: !!name });
   }
   const ix = (s) => { const i = sizes.indexOf(s); return i < 0 ? 999 : i; };
-  const lines = [...map.values()].sort((a, b) => ix(a.size) - ix(b.size) || a.colour.localeCompare(b.colour) || a.fabric.localeCompare(b.fabric) || a.description.localeCompare(b.description));
+  const all = [...map.values()];
+  // Named lists keep the order they were pasted in. Plain size/colour lists are still sorted.
+  const lines = all.some((l) => l.named) ? all : all.sort((a, b) => ix(a.size) - ix(b.size) || a.colour.localeCompare(b.colour) || a.fabric.localeCompare(b.fabric) || a.description.localeCompare(b.description));
   if (!lines.length) warnings.push("No order lines were found in the text.");
   return { lines, warnings };
 }
@@ -107,7 +112,7 @@ export async function POST(req) {
     if (permErr || allowed !== true) return NextResponse.json({ error: "You don't have permission to read order lists." }, { status: 403 });
 
     const body = await req.json().catch(() => null);
-    const text = san(body?.text);
+    const text = san(body?.text).replace(/[\u2060\u200b-\u200d\ufeff]/g, "");
     const sizes = Array.isArray(body?.sizes) ? body.sizes.map(san).filter((s) => s && s.length <= 20).slice(0, 60) : [];
     if (!text) return NextResponse.json({ error: "Paste the order details first." }, { status: 400 });
     if (text.length > MAX_TEXT) return NextResponse.json({ error: "The list is too long. Split it into two." }, { status: 400 });
