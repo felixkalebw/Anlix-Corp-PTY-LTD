@@ -1,4 +1,5 @@
 import './globals.css'
+import AuthProvider from '@/components/AuthProvider'
 import { Provider } from '@/components/Store'
 import Shell from '@/components/Shell'
 
@@ -11,7 +12,11 @@ export default function RootLayout({ children }) {
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
         <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&display=swap" />
       </head>
-      <body><Provider><Shell>{children}</Shell></Provider></body>
+      <body>
+        <AuthProvider>
+          <Provider><Shell>{children}</Shell></Provider>
+        </AuthProvider>
+      </body>
     </html>
   )
 }
