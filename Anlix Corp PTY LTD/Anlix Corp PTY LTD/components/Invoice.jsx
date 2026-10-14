@@ -1,0 +1,156 @@
+'use client'
+import { useEffect, useRef, useState } from 'react'
+import Link from 'next/link'
+import { useParams } from 'next/navigation'
+import { useApp } from './Store'
+import { TODAY, calc, unit, phase } from '@/lib/model'
+
+const P = (n) => 'P' + (+n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const D = (s) => {
+  if (!s) return ''
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(s + 'T00:00:00') : new Date(s)
+  return isNaN(d) ? String(s) : d.getDate() + ' ' + d.toLocaleString('en-GB', { month: 'long' }) + ' ' + d.getFullYear()
+}
+
+// An order is a GPO order when it carries the gpo flag (set on the New order screen).
+// Until the flag is stored, a company or customer name containing "GPO" is also treated as one.
+export const isGpo = (o) => !!o.gpo || /\bGPO\b/i.test(`${o.ent || ''} ${o.placed || ''}`)
+
+// The invoice is only produced once the job card is completed.
+export const isCompleted = (S, o) => !!o.closed || phase(S, o) === 'Completed'
+
+export function invoiceStatus(o, c) {
+  const paid = Math.min(Math.max(c.paid, 0), c.net)
+  const bal = c.net - paid
+  const last = [...(o.pays || [])].map((p) => p.d).sort().pop() || ''
+  if (c.net > 0 && bal <= 0.005) return { label: 'FULLY PAID', full: true, paid, bal: 0, last, note: `Payment of ${P(paid)} received in full${last ? ' on ' + D(last) : ''}.`, tail: 'This invoice is settled in full.' }
+  if (paid <= 0.005 && isGpo(o)) return { label: 'FULL AMOUNT OUTSTANDING', paid: 0, bal, last: '', note: `GPO order: payment of ${P(bal)} is pending.`, tail: `Full amount of ${P(bal)} is still outstanding.` }
+  if (paid <= 0.005) return { label: 'BALANCE DUE', paid: 0, bal, last: '', note: 'No payment has been received yet.', tail: `Full amount of ${P(bal)} is still outstanding.` }
+  return { label: 'BALANCE DUE', paid, bal, last, note: `Part payment of ${P(paid)} received${last ? ' on ' + D(last) : ''}.`, tail: `Remaining balance of ${P(bal)} is still outstanding.` }
+}
+
+const Logo = () => (
+  <svg width="270" height="100" viewBox="0 0 270 100" role="img" aria-label="Anlix">
+    <polygon points="40,0 80,78 70,78 40,18 18,62 28,62 36,78 0,78" fill="#000" />
+    <polygon points="0,78 28,78 14,50" fill="#000" />
+    <text x="70" y="78" fontFamily="Helvetica,Arial,sans-serif" fontWeight="700" fontSize="84" letterSpacing="-2" fill="#000">nlix</text>
+  </svg>
+)
+const Stamp = () => (
+  <svg width="190" height="190" viewBox="0 0 190 190" role="img" aria-label="Anlix Corp stamp" style={{ transform: 'rotate(-6deg)' }}>
+    <defs><path id="inv-ta" d="M30,95 A65,65 0 0 1 160,95" /><path id="inv-tb" d="M24,95 A71,71 0 0 0 166,95" /></defs>
+    <circle cx="95" cy="95" r="90" fill="none" stroke="#000" strokeWidth="3" />
+    <circle cx="95" cy="95" r="52" fill="none" stroke="#000" strokeWidth="1" />
+    <text fontFamily="Helvetica,Arial,sans-serif" fontWeight="700" fontSize="15" letterSpacing="2"><textPath href="#inv-ta" startOffset="50%" textAnchor="middle">ANLIX CORP (PTY) LTD</textPath></text>
+    <text fontFamily="Helvetica,Arial,sans-serif" fontWeight="700" fontSize="10.5" letterSpacing="1.5"><textPath href="#inv-tb" startOffset="50%" textAnchor="middle">• TLOKWENG, GABORONE, BOTSWANA •</textPath></text>
+    <text x="95" y="92" textAnchor="middle" fontFamily="Helvetica,Arial,sans-serif" fontWeight="700" fontSize="11">Tel: 76 675 006</text>
+    <line x1="55" y1="99" x2="135" y2="99" stroke="#000" strokeWidth=".8" />
+    <text x="95" y="111" textAnchor="middle" fontFamily="Helvetica,Arial,sans-serif" fontWeight="700" fontSize="8">anlixbw@gmail.com</text>
+  </svg>
+)
+
+const CSS = `
+.inv-bar{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap}
+.inv-wrap{position:relative;margin:0 auto}
+.inv-sheet{width:794px;min-height:1123px;background:#fff;color:#000;padding:60px 60px 34px;display:flex;flex-direction:column;box-shadow:0 2px 14px rgba(0,0,0,.18);transform-origin:top left;position:absolute;top:0;left:0;font-family:Helvetica,Arial,sans-serif;line-height:1.4}
+.inv-sheet *{box-sizing:border-box}
+.inv-top{display:flex;justify-content:space-between;align-items:flex-start}
+.inv-title{font-size:42px;font-weight:700;letter-spacing:-.5px;margin-top:6px}
+.inv-meta{display:flex;justify-content:space-between;margin-top:34px;font-size:13.5px;line-height:1.55}
+.inv-meta dl{margin:0;display:grid;grid-template-columns:auto auto;gap:0 14px}
+.inv-meta dt{font-weight:700}.inv-meta dd{margin:0}
+.inv-bill{margin-top:34px;border-bottom:1px solid #000;padding-bottom:6px;font-weight:700;font-size:12.5px}
+.inv-to{margin-top:12px;font-size:13.5px;line-height:1.55}
+.inv-sheet table{width:100%;border-collapse:collapse;margin-top:36px;font-size:13.5px}
+.inv-sheet th{background:#000;color:#fff;text-align:left;padding:9px 12px}
+.inv-sheet td{padding:10px 12px;border-bottom:1px solid #000;color:#000}
+.inv-sheet th:nth-child(n+2),.inv-sheet td:nth-child(n+2){text-align:right}
+.inv-tot{margin:14px 0 0 auto;width:290px;font-size:13.5px}
+.inv-tot div{display:flex;justify-content:space-between;padding:3px 12px}
+.inv-tot .bal{border-top:1px solid #000;margin-top:8px;padding-top:9px;font-weight:700}
+.inv-notes{margin-top:44px;font-size:13.5px;line-height:1.6}
+.inv-stamp{display:flex;justify-content:flex-end;margin-top:14px;padding-right:16px}
+.inv-foot{margin-top:auto;border-top:1px solid #000;padding-top:9px;text-align:center;font-size:10.5px}
+@media print{
+ @page{size:A4;margin:0}
+ body *{visibility:hidden}
+ .inv-wrap,.inv-wrap *{visibility:visible}
+ .inv-wrap{position:absolute!important;left:0;top:0;width:210mm!important;height:auto!important}
+ .inv-sheet{box-shadow:none;transform:none!important;width:210mm;min-height:297mm;position:relative}
+}`
+
+export function Invoice() {
+  const { jc } = useParams()
+  const { S } = useApp()
+  const wrap = useRef(null), sheet = useRef(null)
+  const [k, setK] = useState({ s: 1, h: 1123 })
+  const o = S.orders.find((x) => x.jc === decodeURIComponent(jc))
+
+  useEffect(() => {
+    const fit = () => {
+      if (!wrap.current?.parentElement || !sheet.current) return
+      const s = Math.min(1, wrap.current.parentElement.clientWidth / 794)
+      const h = sheet.current.offsetHeight * s
+      setK((p) => (Math.abs(p.s - s) < 0.001 && Math.abs(p.h - h) < 1 ? p : { s, h }))
+    }
+    fit(); addEventListener('resize', fit)
+    return () => removeEventListener('resize', fit)
+  })
+
+  if (!o) return (<div className="top"><h1>Job card not found</h1><Link href="/orders">Back to orders</Link></div>)
+  const back = <Link href={'/orders/' + o.jc}>Back to job card {o.jc}</Link>
+  if (!isCompleted(S, o)) return (
+    <>
+      <div className="top"><div><h1>Invoice {o.inv}</h1><div className="sub">Job card {o.jc}</div></div></div>
+      <div className="card"><div className="note w">The invoice is produced when the job card is completed. This order is currently: {phase(S, o)}.</div><p>{back}</p></div>
+    </>
+  )
+
+  const c = calc(S, o), st = invoiceStatus(o, c)
+  const date = o.closed?.at ? String(o.closed.at).slice(0, 10) : TODAY
+  const rows = o.lines.map((l) => {
+    const u = unit(S, l, c.q)
+    return { d: [l.colour, l.desc || 'T-shirts', l.s ? `(${l.s})` : ''].filter(Boolean).join(' '), q: l.q, p: u.price, a: l.q * u.price }
+  })
+
+  return (
+    <>
+      <style>{CSS}</style>
+      <div className="inv-bar">
+        <div><h1 style={{ margin: 0 }}>Invoice {o.inv}</h1><div className="sub">Created from job card {o.jc}</div></div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>{back}<button className="btn" onClick={() => window.print()}>Print or save as PDF</button></div>
+      </div>
+      <div className="inv-wrap" ref={wrap} style={{ width: 794 * k.s, height: k.h }}>
+        <div className="inv-sheet" ref={sheet} style={{ transform: `scale(${k.s})` }}>
+          <div className="inv-top"><Logo /><div className="inv-title">INVOICE</div></div>
+          <div className="inv-meta">
+            <div><strong>Anlix Corp (Pty) Ltd</strong><br />Tlokweng, Gaborone, Botswana<br />Tel: 76 675 006<br />Email: anlixbw@gmail.com</div>
+            <dl>
+              <dt>Invoice No:</dt><dd>{o.inv}</dd>
+              <dt>Date:</dt><dd>{D(date)}</dd>
+              {st.paid > 0 && <><dt>{st.bal > 0 ? 'Part Paid:' : 'Paid:'}</dt><dd>{D(st.last)}</dd></>}
+              <dt>Job Card:</dt><dd>{o.jc}</dd>
+              <dt>Status:</dt><dd><strong>{st.label}</strong></dd>
+            </dl>
+          </div>
+          <div className="inv-bill">BILLED TO</div>
+          <div className="inv-to"><strong>{o.placed}</strong><br />{o.ent}{o.phone ? <><br />Tel: {o.phone}</> : null}</div>
+          <table>
+            <thead><tr><th>Description</th><th>Qty</th><th>Unit Price</th><th>Amount</th></tr></thead>
+            <tbody>{rows.map((r, i) => <tr key={i}><td>{r.d}</td><td>{r.q}</td><td>{P(r.p)}</td><td>{P(r.a)}</td></tr>)}</tbody>
+          </table>
+          <div className="inv-tot">
+            <div><span>Subtotal</span><span>{P(c.sub)}</span></div>
+            {c.d > 0 && <div><span>Discount</span><span>-{P(c.d)}</span></div>}
+            {c.d > 0 && <div><span>Net Total</span><span>{P(c.net)}</span></div>}
+            {st.paid > 0 && <div><span>Amount Paid</span><span>-{P(st.paid)}</span></div>}
+            <div className="bal"><span>Balance Due</span><span>{P(st.bal)}</span></div>
+          </div>
+          <div className="inv-notes">{st.note}<br /><strong>{st.tail}</strong><br />Thank you for your business.</div>
+          <div className="inv-stamp"><Stamp /></div>
+          <div className="inv-foot">Anlix Corp (Pty) Ltd &nbsp;|&nbsp; anlixbw@gmail.com &nbsp;|&nbsp; 76 675 006</div>
+        </div>
+      </div>
+    </>
+  )
+}
