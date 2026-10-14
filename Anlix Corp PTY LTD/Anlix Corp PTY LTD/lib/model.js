@@ -64,6 +64,10 @@ export function phase(S, o) {
   return 'In production'
 }
 export const phaseTag = (p) => (p === 'Completed' || p === 'Ready for collection' ? 'g' : /^Awaiting|hold|pending/.test(p) ? 'a' : 'b')
+export const RESP_TYPES = ['Staff member', 'Supplier', 'Equipment or machine', 'Customer change', 'Process or instruction', 'Other']
+export const reworksOf = (o) => (o.stages || []).filter((s) => s.rw)
+export const reworkCost = (o) => reworksOf(o).reduce((t, s) => t + (+(s.rw.act ?? s.rw.est) || 0), 0)
+export const stageBlocked = (o, i) => (o.stages || []).slice(0, i).some((s) => !isDone(s))
 export const jobNo = (S) => `JC-${TODAY.slice(0, 4)}-${String(S.seq + 1).padStart(4, '0')}`
 const now = () => new Date().toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
 
@@ -106,21 +110,64 @@ export function reduce(S, a) {
     }
     case 'stage': {
       const o = S.orders.find((x) => x.jc === a.jc)
-      if (!o || !o.prod) return S
+      if (!o || !o.prod || o.closed) return S
       const t = new Date().toISOString(), st = (o.stages && o.stages.length ? o.stages : mkStages()).map((s) => ({ ...s }))
       const i = st.findIndex((s) => s.k === a.k)
       if (i < 0) return S
-      const s = st[i], words = { start: 'started', done: 'completed', skip: 'skipped', pass: 'passed inspection', fail: 'failed inspection' }
-      if (a.op === 'start') { s.st = 'active'; s.start = t; s.by = S.user }
-      else if (a.op === 'skip') { s.st = 'skipped'; s.end = t; s.by = S.user }
-      else if (a.op === 'done' || a.op === 'pass') { s.st = 'done'; s.end = t; s.by = S.user; s.start = s.start || t; if (a.op === 'pass') s.result = 'Pass' }
-      else if (a.op === 'fail') {
-        s.st = 'pending'; s.result = 'Fail'; s.fails = (s.fails || 0) + 1; s.by = S.user
-        const n = st.filter((x) => /^Rework/.test(x.k)).length + 1
-        st.splice(i + 1, 0, { k: 'Rework and reinspection' + (n > 1 ? ' ' + n : ''), st: 'active', start: t, by: S.user })
+      const s = st[i], who = (a.approver || S.user || '').trim() || S.user, note = (a.note || '').trim()
+      const words = { start: 'started', done: 'approved and completed', skip: 'skipped', pass: 'passed inspection' }
+      if (!words[a.op]) return S
+      if (a.op === 'start') {
+        if (s.st !== 'pending' || stageBlocked({ stages: st }, i)) return S
+        s.st = 'active'; s.start = t; s.by = S.user
+      } else if (a.op === 'skip') {
+        if (s.st !== 'pending' || !note || a.k === STAGES[4] || a.k === STAGES[6] || stageBlocked({ stages: st }, i)) return S
+        s.st = 'skipped'; s.end = t; s.by = S.user; s.appr = { by: who, at: t, note }
+      } else {
+        if (s.st !== 'active') return S
+        if (st.some((x) => x.rw && x.rw.from === s.k && !isDone(x))) return S // open rework on this stage
+        if (a.k === STAGES[6] && calc(S, o).bal > 0.005) return S
+        s.st = 'done'; s.end = t; s.by = S.user; s.start = s.start || t; s.appr = { by: who, at: t, note }
+        if (a.op === 'pass') s.result = 'Pass'
       }
       const next = st.find((x) => !isDone(x))
-      return { ...add(log(`Stage "${a.k}" ${words[a.op]}`, a.jc)), orders: S.orders.map((x) => (x.jc === a.jc ? { ...x, stages: st, prodStatus: next ? next.k : 'Packed' } : x)) }
+      const detail = (a.op === 'done' || a.op === 'pass') ? ` by ${who}${note ? ': ' + note : ''}` : a.op === 'skip' ? `: ${note}` : ''
+      return { ...add(log(`Stage "${a.k}" ${words[a.op]}${detail}`, a.jc)), orders: S.orders.map((x) => (x.jc === a.jc ? { ...x, stages: st, prodStatus: next ? next.k : 'Packed' } : x)) }
+    }
+    case 'rework': {
+      const o = S.orders.find((x) => x.jc === a.jc)
+      if (!o || !o.prod || o.closed) return S
+      const t = new Date().toISOString(), st = (o.stages && o.stages.length ? o.stages : mkStages()).map((s) => ({ ...s }))
+      const i = st.findIndex((s) => s.k === a.k)
+      if (i < 0) return S
+      const src = st[i], what = (a.what || '').trim(), happened = (a.happened || '').trim(), who = (a.who || '').trim()
+      const mat = Math.max(0, +a.mat || 0), lab = Math.max(0, +a.lab || 0), oth = Math.max(0, +a.oth || 0), est = +(mat + lab + oth).toFixed(2)
+      if (src.rw || !what || !happened || !who || !RESP_TYPES.includes(a.whoType)) return S
+      if (a.fail ? !(a.k === STAGES[4] && src.st === 'active') : !(src.st === 'active' || src.st === 'done')) return S
+      const n = st.filter((x) => x.rw).length + 1, id = `RW-${o.jc.slice(3)}-${n}`
+      if (a.fail) { src.st = 'pending'; src.result = 'Fail'; src.fails = (src.fails || 0) + 1; src.by = S.user }
+      const rw = { id, from: src.k, what, happened, who, whoType: a.whoType, qty: Math.max(0, parseInt(a.qty) || 0), mat, lab, oth, est, raisedBy: S.user, raisedAt: t, found: a.fail ? 'Quality inspection' : src.k }
+      // a failed inspection sends the job back before the inspection point; other rework sits straight after the stage it came from
+      st.splice(a.fail ? i : i + 1, 0, { k: `Rework ${n}: ${src.k}`, st: 'active', start: t, by: S.user, rw })
+      const fin = { id, date: TODAY, category: 'Wastage and rework', desc: `${src.k}: ${what} (responsible: ${who}, ${a.whoType})`, amount: est, ref: o.jc, by: S.user }
+      const next = st.find((x) => !isDone(x))
+      return { ...add(log(`Rework ${id} raised at "${src.k}": ${what}. What happened: ${happened}. Responsible: ${who} (${a.whoType}). Estimated cost ${f2(est)}${a.fail ? '. Inspection failed' : ''}`, a.jc)),
+        finance: [...(S.finance || []), fin], orders: S.orders.map((x) => (x.jc === a.jc ? { ...x, stages: st, prodStatus: next ? next.k : 'Packed' } : x)) }
+    }
+    case 'reworkDone': {
+      const o = S.orders.find((x) => x.jc === a.jc)
+      if (!o || !o.prod || o.closed) return S
+      const t = new Date().toISOString(), st = (o.stages || []).map((s) => ({ ...s }))
+      const s = st.find((x) => x.k === a.k)
+      if (!s || !s.rw || s.st !== 'active') return S
+      const act = +a.actual, who = (a.approver || S.user || '').trim() || S.user, note = (a.note || '').trim()
+      if (!Number.isFinite(act) || act < 0) return S
+      s.rw = { ...s.rw, act: +act.toFixed(2), doneAt: t, fix: note }
+      s.st = 'done'; s.end = t; s.by = S.user; s.appr = { by: who, at: t, note }
+      const diff = act - s.rw.est, next = st.find((x) => !isDone(x))
+      const finance = (S.finance || []).map((x) => (x.id === s.rw.id && x.ref === o.jc ? { ...x, amount: +act.toFixed(2) } : x))
+      return { ...add(log(`Rework ${s.rw.id} completed and approved by ${who}. Actual cost ${f2(act)}${diff ? ` (estimate was ${f2(s.rw.est)})` : ''}${note ? '. ' + note : ''}`, a.jc)),
+        finance, orders: S.orders.map((x) => (x.jc === a.jc ? { ...x, stages: st, prodStatus: next ? next.k : 'Packed' } : x)) }
     }
     case 'close': {
       const o = S.orders.find((x) => x.jc === a.jc)
