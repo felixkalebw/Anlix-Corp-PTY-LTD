@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { useParams, useRouter } from 'next/navigation'
 import { useApp } from './Store'
 import { supabase } from '@/lib/supabase'
-import { TODAY, f2, f0, pc, fd, sum, sz, cost, price, qty, calc, stat, unit, alerts, snapshot, costParts, jobNo, COST_N } from '@/lib/model'
+import { TODAY, f2, f0, pc, fd, sum, sz, cost, price, qty, calc, unit, alerts, snapshot, costParts, jobNo, COST_N, STAGES, mkStages, isDone, progress, overdue, phase, phaseTag } from '@/lib/model'
 
 const Head = ({ title, sub }) => {
   const { S, dispatch } = useApp()
@@ -23,7 +23,7 @@ const Table = ({ head, right = 99, children }) => (
     <tbody>{children}</tbody>
   </table></div>
 )
-const Tag = ({ o }) => { const { S } = useApp(); const [t, k] = stat(S, o); return <span className={'tag ' + k}>{t}</span> }
+const Tag = ({ o }) => { const { S } = useApp(); const p = phase(S, o); return <span className={'tag ' + phaseTag(p)}>{p}</span> }
 const Bar = ({ label, v, max, right, lo, cols, onClick }) => (
   <div className="mr" style={cols && { gridTemplateColumns: cols }} role={onClick ? 'button' : undefined} tabIndex={onClick ? 0 : undefined}
     onClick={onClick} onKeyDown={onClick && ((e) => e.key === 'Enter' && onClick())}>
@@ -32,17 +32,19 @@ const Bar = ({ label, v, max, right, lo, cols, onClick }) => (
     <span>{right}</span>
   </div>
 )
-const Num = ({ label, value, onSave }) => (
-  <label>{label}<input type="number" step="any" min="0" defaultValue={value} key={value} onBlur={(e) => onSave(parseFloat(e.target.value) || 0)} /></label>
+const Num = ({ label, value, onSave, ro }) => (
+  <label>{label}<input type="number" step="any" min="0" disabled={ro} defaultValue={value} key={value} onBlur={(e) => onSave(parseFloat(e.target.value) || 0)} /></label>
 )
 
 function OrdersTable({ list }) {
   const { S } = useApp()
   return (
-    <Table head={['Job card', 'Date', 'Received by', 'Placed by', 'Entity', 'Shirts', 'Net total', 'Balance', 'Status']} right={5}>
-      {list.map((o) => { const c = calc(S, o); return (
-        <tr key={o.jc}><td><Link href={'/orders/' + o.jc}>{o.jc}</Link></td><td>{fd(o.date)}</td><td>{o.by}</td><td>{o.placed}</td><td>{o.ent}</td>
-          <td className="r">{c.q}</td><td className="r">{f2(c.net)}</td><td className="r">{f2(c.bal)}</td><td><Tag o={o} /></td></tr>
+    <Table head={['Job card', 'Date', 'Due', 'Placed by', 'Entity', 'Shirts', 'Net total', 'Balance', 'Progress', 'Status']} right={5}>
+      {list.map((o) => { const c = calc(S, o), p = progress(o); return (
+        <tr key={o.jc}><td><Link href={'/orders/' + o.jc}>{o.jc}</Link></td><td>{fd(o.date)}</td>
+          <td style={overdue(o) ? { color: 'var(--warn)', fontWeight: 600 } : undefined}>{o.dueDate ? fd(o.dueDate) : '–'}</td><td>{o.placed}</td><td>{o.ent}</td>
+          <td className="r">{c.q}</td><td className="r">{f2(c.net)}</td><td className="r">{f2(c.bal)}</td>
+          <td style={{ minWidth: 90 }}><div className="mt" title={p + '%'}><div className="mb" style={{ width: p + '%' }} /></div></td><td><Tag o={o} /></td></tr>
       ) })}
     </Table>
   )
@@ -109,20 +111,29 @@ export function Dashboard() {
   )
 }
 
+const FILTERS = ['All', 'Overdue', 'Awaiting deposit or payment', 'Artwork pending', 'In production', 'Quality hold', 'Ready for collection', 'Completed']
+
 export function Orders() {
-  const { S } = useApp()
+  const { S } = useApp(), [q, setQ] = useState(''), [f, setF] = useState('All')
+  const hit = (o) => [o.jc, o.qt, o.inv, o.ent, o.placed, o.phone].some((v) => (v || '').toLowerCase().includes(q.trim().toLowerCase()))
+  const ok = (o) => { const p = phase(S, o); return f === 'All' || (f === 'Overdue' ? overdue(o) : f === 'Awaiting deposit or payment' ? p.startsWith('Awaiting') : p === f) }
+  const list = [...S.orders].reverse().filter((o) => hit(o) && ok(o))
   return (
     <>
-      <Head title="Orders" />
-      <div className="card">{S.orders.length ? <OrdersTable list={[...S.orders].reverse()} /> : <p>No orders yet. Register the first order to get its job card number.</p>}
-        <p><Link className="btn" href="/new" style={{ display: 'inline-flex', alignItems: 'center', color: '#fff', textDecoration: 'none' }}>New order</Link></p></div>
+      <Head title="Orders" sub="Search by job card, quotation, invoice, customer, company or phone." />
+      <div className="card">
+        <label>Search<input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Job card, customer, phone…" /></label>
+        <div className="chips" style={{ margin: '12px 0' }}>{FILTERS.map((x) => <button key={x} className={'chip' + (f === x ? ' on' : '')} onClick={() => setF(x)}>{x}</button>)}</div>
+        {list.length ? <OrdersTable list={list} /> : <p className="sub">{S.orders.length ? 'No orders match.' : 'No orders yet. Register the first order to get its job card number.'}</p>}
+        <p><Link className="btn" href="/new" style={{ display: 'inline-flex', alignItems: 'center', color: '#fff', textDecoration: 'none' }}>New order</Link></p>
+      </div>
     </>
   )
 }
 
 export function NewOrder() {
   const { S, dispatch } = useApp(), router = useRouter()
-  const [d, setD] = useState({ by: S.user, placed: '', ent: '', dt: '%', dv: 0, dr: '' }), [lines, setLines] = useState([])
+  const [d, setD] = useState({ by: S.user, placed: '', ent: '', phone: '', dueDate: '', dt: '%', dv: 0, dr: '' }), [lines, setLines] = useState([])
   const [ls, setLs] = useState(S.sizes[0].n), [lq, setLq] = useState(1), [err, setErr] = useState('')
   const set = (k) => (e) => setD({ ...d, [k]: e.target.value })
   const c = calc(S, { lines, dt: d.dt, dv: d.dv, pays: [] }), q = c.q
@@ -142,6 +153,8 @@ export function NewOrder() {
             <label>Received by<select value={d.by} onChange={set('by')}><option>Staff 1</option><option>Staff 2</option></select></label>
             <label>Placed by<input value={d.placed} onChange={set('placed')} placeholder="Person's name" /></label>
             <label>Entity or company<input value={d.ent} onChange={set('ent')} placeholder="Company name" /></label>
+            <label>Phone<input type="tel" value={d.phone} onChange={set('phone')} /></label>
+            <label>Due date<input type="date" value={d.dueDate} onChange={set('dueDate')} /></label>
           </div>
           <h2 style={{ marginTop: 18 }}>Add shirts</h2>
           <div className="fm">
@@ -177,19 +190,51 @@ export function NewOrder() {
   )
 }
 
+const ST_TAG = { pending: '', active: 'b', done: 'g', skipped: '' }
+const when = (t) => (t ? new Date(t).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '')
+
+function Production({ o, c }) {
+  const { dispatch } = useApp()
+  const st = o.stages && o.stages.length ? o.stages : mkStages()
+  const reworking = st.some((s) => /^Rework/.test(s.k) && s.st === 'active')
+  const act = (k, op) => dispatch({ type: 'stage', jc: o.jc, k, op })
+  return (
+    <div className="card"><h2>Production stages</h2>
+      {!o.prod ? <div className="note w">Stages unlock once the required payment is recorded and the job is moved to production.</div> : (
+        <Table head={['Stage', 'Status', 'By', 'Started', 'Finished', '']}>
+          {st.map((s) => { const qc = s.k === STAGES[4], fin = s.k === STAGES[6]; return (
+            <tr key={s.k}><td>{s.k}{s.fails ? <span className="sub"> · failed {s.fails}×</span> : null}</td>
+              <td><span className={'tag ' + (ST_TAG[s.st] || '')}>{s.st}{s.result ? ' · ' + s.result : ''}</span></td><td>{s.by || ''}</td><td>{when(s.start)}</td><td>{when(s.end)}</td>
+              <td>{s.st === 'pending' && <><button className="btn o" disabled={qc && reworking} onClick={() => act(s.k, 'start')}>Start</button>{!qc && !fin && <> <button className="btn o" onClick={() => act(s.k, 'skip')}>Skip</button></>}</>}
+                {s.st === 'active' && (qc ? <><button className="btn o" onClick={() => act(s.k, 'pass')}>Pass</button> <button className="btn o" onClick={() => act(s.k, 'fail')}>Fail</button></>
+                  : <button className="btn o" disabled={fin && c.bal > 0.005} onClick={() => act(s.k, 'done')}>Complete</button>)}</td></tr>) })}
+        </Table>)}
+      {o.closed ? <div className="note">Closed {when(o.closed.at)}. Revenue {f2(o.closed.revenue)}, total cost {f2(o.closed.cost)}, actual profit {f2(o.closed.profit)} ({o.closed.revenue ? pc(o.closed.profit / o.closed.revenue) : '–'}).</div>
+        : o.prod && <p><button className="btn" disabled={!st.every(isDone) || c.bal > 0.005} onClick={() => dispatch({ type: 'close', jc: o.jc })}>Close order and calculate profit</button></p>}
+      {o.prod && !o.closed && c.bal > 0.005 && <div className="sub">Final payment must be received before the order can be closed.</div>}
+    </div>
+  )
+}
+
 export function Job() {
-  const { jc } = useParams(), { S, dispatch } = useApp(), [p, setP] = useState({ amt: '', by: '', ent: '', d: TODAY })
+  const { jc } = useParams(), { S, dispatch } = useApp(), [p, setP] = useState({ amt: '', by: '', ent: '', d: TODAY }), [err, setErr] = useState('')
   const o = S.orders.find((x) => x.jc === decodeURIComponent(jc))
   if (!o) return (<><Head title="Job card not found" /><Link href="/orders">Back to orders</Link></>)
-  const c = calc(S, o), [st] = stat(S, o)
-  const pay = () => { dispatch({ type: 'pay', jc: o.jc, amt: +p.amt, by: p.by || o.placed, ent: p.ent || o.ent, d: p.d }); setP({ ...p, amt: '' }) }
+  const c = calc(S, o), pr = progress(o)
+  const pay = () => {
+    if (!(+p.amt > 0)) return setErr('Enter an amount.')
+    if (+p.amt > c.bal + 0.005) return setErr(`The amount is more than the remaining balance of ${f2(c.bal)}.`)
+    setErr(''); dispatch({ type: 'pay', jc: o.jc, amt: +p.amt, by: p.by || o.placed, ent: p.ent || o.ent, d: p.d }); setP({ ...p, amt: '' })
+  }
   return (
     <>
-      <div className="top"><div><h1>Job card {o.jc}</h1><div className="chips" style={{ marginTop: 8 }}><span className="tag b">{o.qt}</span><span className="tag b">{o.inv}</span><span className="tag b">{st}</span></div></div></div>
+      <div className="top"><div><h1>Job card {o.jc}</h1><div className="chips" style={{ marginTop: 8 }}><span className="tag b">{o.qt}</span><span className="tag b">{o.inv}</span><Tag o={o} />{overdue(o) && <span className="tag a">Overdue</span>}</div></div>
+        <button className="btn o" onClick={() => window.print()}>Print job card</button></div>
+      {o.stages && o.stages.length > 0 && <div><div className="mt"><div className="mb" style={{ width: pr + '%' }} /></div><div className="sub">{pr}% of production stages complete</div></div>}
       <div className="grid">
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div className="card"><h2>Order details</h2>
-            <div className="kp">{[['Order date', fd(o.date)], ['Received by', o.by], ['Placed by', o.placed], ['Entity', o.ent]].map(([l, v]) => <div key={l}><div className="sub">{l}</div>{v}</div>)}</div></div>
+            <div className="kp">{[['Order date', fd(o.date)], ['Due date', o.dueDate ? fd(o.dueDate) : '–'], ['Received by', o.by], ['Placed by', o.placed], ['Entity', o.ent], ['Phone', o.phone || '–']].map(([l, v]) => <div key={l}><div className="sub">{l}</div>{v}</div>)}</div></div>
           <div className="card"><h2>Order lines</h2>
             <Table head={['Size', 'Qty', 'Unit price', 'Unit cost', 'Line total']} right={1}>
               {o.lines.map((l) => { const u = unit(S, l, c.q); return <tr key={l.s}><td>{l.s}</td><td className="r">{l.q}</td><td className="r">{f2(u.price)}</td><td className="r">{f2(u.cost)}</td><td className="r">{f2(l.q * u.price)}</td></tr> })}
@@ -199,6 +244,7 @@ export function Job() {
             <div className="tot big"><span>Net total</span><span>{f2(c.net)}</span></div>
             <div className="tot"><span>Production cost</span><span>{f2(c.cs)}</span></div>
             <div className="tot"><span>Gross profit</span><span>{f2(c.gp)}</span></div></div>
+          <Production o={o} c={c} />
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div className="card"><h2>Payments</h2>
@@ -212,6 +258,7 @@ export function Job() {
               <label>Entity<input value={p.ent || o.ent} onChange={(e) => setP({ ...p, ent: e.target.value })} /></label>
               <label>Date<input type="date" value={p.d} onChange={(e) => setP({ ...p, d: e.target.value })} /></label>
             </div>
+            {err && <div className="note w">{err}</div>}
             <p><button className="btn o" onClick={pay}>Record payment</button>{' '}
               <button className="btn" disabled={!c.ok || o.prod} onClick={() => dispatch({ type: 'produce', jc: o.jc })}>{o.prod ? 'In production' : 'Move to production'}</button></p></div>
           <div className="card"><h2>Audit trail</h2>
@@ -236,13 +283,13 @@ export function Payments() {
 }
 
 export function Costing() {
-  const { S, dispatch } = useApp(), [z, setZ] = useState({ n: '', c: 'adult', h: '' })
-  const R = (k, label) => <Num key={k} label={label} value={S.R[k]} onSave={(v) => v !== S.R[k] && dispatch({ type: 'rate', k, v })} />
-  const T = (c, j, label) => <Num key={c + j} label={label} value={S.T[c][j]} onSave={(v) => v !== S.T[c][j] && dispatch({ type: 'tier', c, j, v })} />
-  const G = (k, label) => <Num key={k} label={label} value={S[k]} onSave={(v) => v !== S[k] && dispatch({ type: 'setting', k, v })} />
+  const { S, dispatch, canEdit } = useApp(), [z, setZ] = useState({ n: '', c: 'adult', h: '' })
+  const R = (k, label) => <Num ro={!canEdit} key={k} label={label} value={S.R[k]} onSave={(v) => v !== S.R[k] && dispatch({ type: 'rate', k, v })} />
+  const T = (c, j, label) => <Num ro={!canEdit} key={c + j} label={label} value={S.T[c][j]} onSave={(v) => v !== S.T[c][j] && dispatch({ type: 'tier', c, j, v })} />
+  const G = (k, label) => <Num ro={!canEdit} key={k} label={label} value={S[k]} onSave={(v) => v !== S[k] && dispatch({ type: 'setting', k, v })} />
   return (
     <>
-      <Head title="Costing and prices" sub="Changes recalculate every cost and margin. Orders keep the prices and costs saved when they were registered." />
+      <Head title="Costing and prices" sub={canEdit ? 'Changes recalculate every cost and margin. Orders keep the prices and costs saved when they were registered.' : 'Only an admin can change prices, rates and deposit rules.'} />
       <div className="grid">
         <div className="card"><h2>Cost rates</h2><div className="fm">{R('print', 'Printing, per metre')}{R('fabric', 'Fabric, per metre')}{R('press', 'Pressing, per metre')}{R('sew', 'Sewing, per shirt')}</div></div>
         <div className="card"><h2>Prices and payment rules</h2><div className="fm">
@@ -253,7 +300,7 @@ export function Costing() {
         <Table head={['Size', 'Category', 'Pattern height, mm', 'Metres per shirt', 'Cost per shirt']} right={2}>
           {S.sizes.map((x, i) => (
             <tr key={x.n}><td>{x.n}{x.e ? <span className="sub"> estimate</span> : null}</td><td>{x.c}</td>
-              <td className="r"><input type="number" defaultValue={x.h} key={x.h} aria-label={'Height of ' + x.n} style={{ width: 110, margin: '0 0 0 auto' }}
+              <td className="r"><input type="number" defaultValue={x.h} key={x.h} aria-label={'Height of ' + x.n} disabled={!canEdit} style={{ width: 110, margin: '0 0 0 auto' }}
                 onBlur={(e) => { const v = parseFloat(e.target.value); if (v > 0 && v !== x.h) dispatch({ type: 'height', i, v }) }} /></td>
               <td className="r">{(x.h / 1000).toFixed(3)}</td><td className="r">{f2(cost(S, x))}</td></tr>))}
         </Table>
@@ -262,7 +309,7 @@ export function Costing() {
           <label>Name<input value={z.n} onChange={(e) => setZ({ ...z, n: e.target.value })} /></label>
           <label>Category<select value={z.c} onChange={(e) => setZ({ ...z, c: e.target.value })}><option>adult</option><option>kids</option></select></label>
           <label>Pattern height, mm<input type="number" value={z.h} onChange={(e) => setZ({ ...z, h: e.target.value })} /></label>
-          <button className="btn" onClick={() => { if (z.n.trim() && +z.h > 0) { dispatch({ type: 'addSize', size: { n: z.n.trim(), c: z.c, h: +z.h } }); setZ({ n: '', c: 'adult', h: '' }) } }}>Add size</button>
+          <button className="btn" disabled={!canEdit} onClick={() => { if (z.n.trim() && +z.h > 0) { dispatch({ type: 'addSize', size: { n: z.n.trim(), c: z.c, h: +z.h } }); setZ({ n: '', c: 'adult', h: '' }) } }}>Add size</button>
         </div>
       </div>
     </>
@@ -310,10 +357,8 @@ export function Assistant() {
   const ask = async () => {
     if (!q.trim()) return setErr('Type or choose a question first.')
     setBusy(true); setErr(''); setAns('')
-    const { data, error } = await supabase.functions.invoke('ask-luna', { body: { question: q.trim(), snapshot: snapshot(S) } })
-    let msg = error?.message || data?.error || 'no answer returned'
-    if (error?.context?.json) { try { msg = (await error.context.json()).error || msg } catch {} }
-    if (error || !data?.answer) setErr('The assistant could not answer: ' + msg)
+    const { data, error } = await supabase.functions.invoke('ai-manager', { body: { question: q.trim(), snapshot: snapshot(S) } })
+    if (error || !data?.answer) setErr('The assistant could not answer: ' + (error?.message || data?.error || 'no answer returned'))
     else setAns(data.answer)
     setBusy(false)
   }
@@ -331,6 +376,42 @@ export function Assistant() {
         {err && <div className="note w">{err}</div>}
         {ans && <div className="note" style={{ whiteSpace: 'pre-wrap' }}>{ans}</div>}
         <details><summary>Data sent to the assistant</summary><pre style={{ overflow: 'auto', fontSize: 12 }}>{JSON.stringify(snapshot(S), null, 1)}</pre></details></div>
+    </>
+  )
+}
+
+const csv = (rows) => rows.map((r) => r.map((v) => '"' + String(v ?? '').replace(/"/g, '""') + '"').join(',')).join('\n')
+const save = (name, text, type = 'text/csv') => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name; a.click(); URL.revokeObjectURL(a.href) }
+
+export function Data() {
+  const { S, dispatch } = useApp(), [msg, setMsg] = useState('')
+  const stamp = TODAY
+  const orders = () => save(`orders-${stamp}.csv`, csv([['Job card', 'Quotation', 'Invoice', 'Date', 'Due', 'Received by', 'Placed by', 'Entity', 'Phone', 'Shirts', 'Net total', 'Production cost', 'Paid', 'Balance', 'Status'],
+    ...S.orders.map((o) => { const c = calc(S, o); return [o.jc, o.qt, o.inv, o.date, o.dueDate, o.by, o.placed, o.ent, o.phone, c.q, c.net.toFixed(2), c.cs.toFixed(2), c.paid.toFixed(2), c.bal.toFixed(2), phase(S, o)] })]))
+  const pays = () => save(`payments-${stamp}.csv`, csv([['Job card', 'Date', 'Paid by', 'Entity', 'Amount'], ...S.orders.flatMap((o) => o.pays.map((p) => [o.jc, p.d, p.by, p.ent, p.amt.toFixed(2)]))]))
+  const audit = () => save(`audit-${stamp}.csv`, csv([['When', 'Who', 'Job card', 'What happened'], ...S.audit.map((a) => [a.ts, a.u, a.o, a.t])]))
+  const restore = (e) => {
+    const f = e.target.files[0]; if (!f) return
+    f.text().then((t) => {
+      try {
+        const j = JSON.parse(t)
+        if (!Array.isArray(j.orders) || !j.R || !Array.isArray(j.sizes)) throw new Error('This is not an Anlix tracker backup.')
+        if (!confirm('Replace all current data with this backup?')) return
+        dispatch({ type: 'load', state: j }); setMsg('Backup restored.')
+      } catch (x) { setMsg('Could not restore: ' + x.message) }
+    })
+    e.target.value = ''
+  }
+  return (
+    <>
+      <Head title="Data and backups" sub="Download your records, or restore from a backup file." />
+      <div className="card"><h2>Backup</h2>
+        <p className="sub">The backup holds everything: orders, payments, prices, overheads and the audit log. Keep a copy somewhere safe, and test a restore now and then.</p>
+        <p><button className="btn" onClick={() => save(`anlix-backup-${stamp}.json`, JSON.stringify(S, null, 1), 'application/json')}>Download backup</button></p>
+        <label>Restore from backup<input type="file" accept="application/json,.json" onChange={restore} /></label>
+        {msg && <div className="note">{msg}</div>}</div>
+      <div className="card"><h2>Export to Excel (CSV)</h2>
+        <div className="chips"><button className="btn o" onClick={orders}>Orders</button><button className="btn o" onClick={pays}>Payments</button><button className="btn o" onClick={audit}>Audit log</button></div></div>
     </>
   )
 }
