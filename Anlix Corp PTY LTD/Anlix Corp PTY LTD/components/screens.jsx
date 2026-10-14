@@ -258,9 +258,9 @@ export function NewOrder() {
       const j = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(j.error || 'Could not read the list.')
       const read = j.lines.map((l) => mk({ s: l.size, q: l.qty, colour: l.colour || '', fabric: l.fabric || '', desc: l.description || '', unitPrice: l.unit_price ?? '', src: 'list' }))
-      setLines((ls) => sortLines([...ls.filter((l) => l.src !== 'list'), ...read]))
+      setLines((ls) => { const m = [...ls.filter((l) => l.src !== 'list'), ...read]; return j.lines.some((l) => l.named) ? m : sortLines(m) })
       setWarns(j.warnings || [])
-      setMsg(`${read.length} lines read (${sum(read, (l) => l.q)} shirts) and sorted by size and colour. Check them in the order items below before you register.`)
+      setMsg(`${read.length} lines read (${sum(read, (l) => l.q)} shirts). Check them in the order items below before you register.`)
     } catch (e) { setPerr(e.message) }
     setBusy(false)
   }
