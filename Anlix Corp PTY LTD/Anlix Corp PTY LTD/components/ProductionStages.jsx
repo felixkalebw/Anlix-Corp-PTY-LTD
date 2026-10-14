@@ -3,7 +3,7 @@ import { useState } from 'react'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import { useApp } from './Store'
-import { f2, fd, pc, calc, progress, isDone, overdue, phase, phaseTag, mkStages, STAGES, RESP_TYPES, reworksOf, reworkCost, stageBlocked, sum, sz, FAULTS, REMAKE_FAULTS } from '@/lib/model'
+import { f2, fd, pc, calc, progress, isDone, overdue, phase, phaseTag, mkStages, STAGES, RESP_TYPES, reworksOf, reworkCost, stageBlocked, sum, sz, FAULTS, REMAKE_FAULTS, rwAvail, rwDefault } from '@/lib/model'
 
 const when = (t) => (t ? new Date(t).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '–')
 const span = (a, b) => {
@@ -63,7 +63,12 @@ const chk = { width: 20, height: 20, minHeight: 0, margin: 0, flex: '0 0 auto' }
 function ReworkForm({ s, fail, o, base, net, onSubmit }) {
   const { S } = useApp()
   const [f, setF] = useState({ what: '', happened: '', whoType: RESP_TYPES[0], who: '', qty: '', mat: '', lab: '', oth: '', fault: FAULTS[0] })
-  const [pick, setPick] = useState({}), [remake, setRemake] = useState(true)
+  const [pick, setPick] = useState({}), [remake, setRemake] = useState(true), [sel, setSel] = useState(null)
+  // rework stages follow the normal production order; the defaults depend on the fault and where it was found
+  const avail = rwAvail(STAGES.indexOf(s.k), !!fail), defOn = rwDefault(f.fault, avail)
+  const isOn = (k) => (sel ? !!sel[k] : defOn.includes(k))
+  const toggleStep = (k) => setSel({ ...Object.fromEntries(avail.map((x) => [x, isOn(x)])), [k]: !isOn(k) })
+  const chosen = avail.filter(isOn)
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value })
   const setFault = (e) => { setF({ ...f, fault: e.target.value }); setRemake(REMAKE_FAULTS.includes(e.target.value)) }
   const r2 = (n) => +(+n || 0).toFixed(2)
@@ -78,8 +83,8 @@ function ReworkForm({ s, fail, o, base, net, onSubmit }) {
   const lbl = (l) => [l.s, l.colour, l.desc || 'T-shirt'].filter(Boolean).join(' · ')
   const autoWhat = picked.length ? picked.map((x) => `${x.q} × ${lbl(x.l)}`).join('; ') + ` (${f.fault.toLowerCase()})` : ''
   const what = f.what.trim() || autoWhat
-  const ok = what && f.happened.trim() && f.who.trim()
-  const missing = [!what && 'what is being reworked (tick a shirt or type it)', !f.happened.trim() && '"What happened"', !f.who.trim() && 'the name of who is responsible'].filter(Boolean)
+  const ok = what && f.happened.trim() && f.who.trim() && (!avail.length || chosen.length > 0)
+  const missing = [!what && 'what is being reworked (tick a shirt or type it)', !f.happened.trim() && '"What happened"', !f.who.trim() && 'the name of who is responsible', avail.length > 0 && !chosen.length && 'at least one rework stage'].filter(Boolean)
   const after = base - est
   const togglePick = (i, l) => setPick((p) => ({ ...p, [i]: p[i] ? 0 : 1 }))
   return (
@@ -100,6 +105,12 @@ function ReworkForm({ s, fail, o, base, net, onSubmit }) {
             </label>) })}
         </div>
       </div>
+      {avail.length > 0 && (
+        <div style={{ margin: '10px 0' }}>
+          <div className="sub" style={{ marginBottom: 6 }}>Rework stages: same order as production, each one is approved separately. Untick any stage this rework does not need.</div>
+          <div className="rw-pick">{avail.map((k) => <label key={k} className="rw-pick-i"><input type="checkbox" checked={isOn(k)} onChange={() => toggleStep(k)} style={chk} /><span>{k}</span></label>)}</div>
+        </div>
+      )}
       <label style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '6px 0 10px' }}><input type="checkbox" checked={remake} onChange={(e) => setRemake(e.target.checked)} style={chk} /> Remake the shirt(s) from scratch: cost them at full production cost</label>
       <div className="ps-row">
         <Field label="What is being reworked" wide><input value={f.what} onChange={set('what')} placeholder={autoWhat || 'e.g. 12 size L shirts with crooked front print'} /></Field>
@@ -121,7 +132,7 @@ function ReworkForm({ s, fail, o, base, net, onSubmit }) {
         Profit on this order moves from <b>{f2(base)}</b> to <b>{f2(after)}</b>{net > 0 ? ` (margin ${pc(base / net)} to ${pc(after / net)})` : ''}.
       </div>
       {!ok && <div className="note w">Still needed before you can raise this: {missing.join(', ')}.</div>}
-      <button className="btn ps-warn" disabled={!ok} onClick={() => onSubmit({ ...f, what, qty: nPicked || f.qty, mat, lab, oth, remake, items: picked.map((x) => ({ s: x.l.s, colour: x.l.colour || '', desc: x.l.desc || '', q: x.q })), fail })}>{fail ? 'Fail inspection and raise rework' : 'Raise rework'}</button>
+      <button className="btn ps-warn" disabled={!ok} onClick={() => onSubmit({ ...f, what, qty: nPicked || f.qty, mat, lab, oth, remake, steps: chosen, items: picked.map((x) => ({ s: x.l.s, colour: x.l.colour || '', desc: x.l.desc || '', q: x.q })), fail })}>{fail ? 'Fail inspection and raise rework' : 'Raise rework'}</button>
     </div>
   )
 }
@@ -175,6 +186,7 @@ function Step({ s, i, n, last, o, c, open, setOpen, base, act }) {
           <span className="ps-tags">
             {s.fails ? <span className="tag a">Failed {s.fails}×</span> : null}
             {s.result === 'Pass' && <span className="tag g">Passed</span>}
+            {s.rw?.steps?.length ? <span className="tag">{s.rw.steps.filter((x) => x.st === 'done').length}/{s.rw.steps.length} stages</span> : null}
             <span className={'tag ' + (s.rw && s.st === 'active' ? 'a' : TAG[s.st])}>{LABEL[s.st]}</span>
           </span>
         </button>
@@ -198,7 +210,7 @@ function Step({ s, i, n, last, o, c, open, setOpen, base, act }) {
                   <button role="tab" aria-selected={m === 'approve'} className={m === 'approve' ? 'on' : ''} onClick={() => setMode('approve')}>{qc ? 'Pass inspection' : 'Approve'}</button>
                   <button role="tab" aria-selected={m === 'rework'} className={m === 'rework' ? 'on warn' : 'warn'} onClick={() => setMode('rework')}>{qc ? 'Fail and raise rework' : 'Report rework'}</button>
                 </div>}
-                {(m === 'approve' || s.rw) && <ApproveForm key={s.k + 'a'} s={s} pass={qc} blocked={blocked} onSubmit={({ approver, note, actual }) => (s.rw ? act(s.k, 'reworkDone', { approver, note, actual }) : act(s.k, qc ? 'pass' : 'done', { approver, note }))} />}
+                {(m === 'approve' || s.rw) && !s.rw?.steps?.length && <ApproveForm key={s.k + 'a'} s={s} pass={qc} blocked={blocked} onSubmit={({ approver, note, actual }) => (s.rw ? act(s.k, 'reworkDone', { approver, note, actual }) : act(s.k, qc ? 'pass' : 'done', { approver, note }))} />}
                 {m === 'rework' && !s.rw && <ReworkForm key={s.k + 'r'} s={s} fail={qc} o={o} base={base} net={c.net} onSubmit={(f) => { act(s.k, 'rework', f); setMode(null) }} />}
               </>
             )}
@@ -210,10 +222,64 @@ function Step({ s, i, n, last, o, c, open, setOpen, base, act }) {
             )}
             {s.st === 'done' && !s.rw && !qc && m === 'rework' && <ReworkForm key={s.k + 'r2'} s={s} fail={false} o={o} base={base} net={c.net} onSubmit={(f) => { act(s.k, 'rework', f); setMode(null) }} />}
             {s.st === 'done' && !s.rw && m === 'reopen' && <ReopenForm key={s.k + 'o'} s={s} blockedBy={(o.stages || []).slice(i + 1).some((x) => x.st !== 'pending') ? 'A later stage has already started, so this stage cannot be reopened. Use Report rework on this stage instead.' : ''} onSubmit={(reason) => { act(s.k, 'reopen', { reason }); setMode(null) }} />}
+            {s.rw && s.rw.steps?.length > 0 && <RwSteps s={s} act={act} />}
+            {s.rw && s.st === 'active' && !s.rw.steps?.length && <div className="chips" style={{ marginTop: 10 }}><button className="btn o" onClick={() => act(s.k, 'rwPlan')}>Track this rework by stage</button></div>}
             {s.rw && <RwDetail rw={s.rw} />}
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+function RwStepForm({ p, s, last, spent, act }) {
+  const { S } = useApp()
+  const guide = GUIDE[p.k] || []
+  const [ticks, setTicks] = useState([]), [by, setBy] = useState(S.user), [note, setNote] = useState(''), [cost, setCost] = useState(''), [actual, setActual] = useState(null)
+  const own = cost === '' ? 0 : +cost || 0, total = +(spent + own).toFixed(2)
+  const actualVal = actual === null ? (total > 0 ? total.toFixed(2) : String(s.rw.est)) : actual
+  const costOk = cost === '' || (Number.isFinite(+cost) && +cost >= 0)
+  const ready = guide.every((_, i) => ticks[i]) && by.trim() && costOk && (!last || (actualVal !== '' && +actualVal >= 0))
+  return (
+    <div className="ps-form">
+      <div className="ps-form-h">{last ? 'Approve final stage and complete rework' : 'Approve this rework stage'}</div>
+      <div className="ps-checks">
+        {guide.map((g, i) => <label key={g} className="ps-check"><input type="checkbox" checked={!!ticks[i]} onChange={(e) => setTicks(guide.map((_, j) => (j === i ? e.target.checked : !!ticks[j])))} /><span>{g}</span></label>)}
+      </div>
+      <div className="ps-row">
+        <Field label="Approved by"><input value={by} onChange={(e) => setBy(e.target.value)} /></Field>
+        <Field label="Cost of this stage, P (optional)"><input type="number" min="0" step="any" value={cost} onChange={(e) => setCost(e.target.value)} /></Field>
+        {last && <Field label={`Actual total rework cost, P (estimate ${f2(s.rw.est)})`}><input type="number" min="0" step="any" value={actualVal} onChange={(e) => setActual(e.target.value)} /></Field>}
+      </div>
+      <Field label="Notes (optional)" wide><textarea value={note} onChange={(e) => setNote(e.target.value)} /></Field>
+      <button className="btn ps-ok" disabled={!ready} onClick={() => act(s.k, 'rwStep', { sub: 'done', step: p.k, approver: by, note, cost, actual: actualVal })}>{last ? 'Approve and complete rework' : 'Approve stage'}</button>
+      {!ready && <span className="sub"> Tick every check to approve.</span>}
+    </div>
+  )
+}
+
+function RwSteps({ s, act }) {
+  const steps = s.rw.steps, doneN = steps.filter((x) => x.st === 'done').length
+  return (
+    <div className="rw-steps">
+      <div className="rw-prog"><b>{doneN} of {steps.length} rework stages approved</b><div className="progress"><i style={{ width: (doneN / steps.length) * 100 + '%' }} /></div></div>
+      {steps.map((p, i) => {
+        const prevDone = steps.slice(0, i).every((x) => x.st === 'done'), last = i === steps.length - 1
+        const spent = sum(steps.slice(0, i), (x) => +x.cost || 0)
+        return (
+          <div key={p.k} className={'rw-step ' + p.st}>
+            <div className="rw-b">{p.st === 'done' ? '✓' : i + 1}</div>
+            <div className="rw-main">
+              <div className="rw-h"><b>{p.k}</b><span className={'tag ' + (p.st === 'done' ? 'g' : p.st === 'active' ? 'a' : '')}>{p.st === 'done' ? 'Approved' : p.st === 'active' ? 'In progress' : 'Not started'}</span></div>
+              {p.start && <div className="sub">By {p.by || '–'} · Started {when(p.start)}{p.end ? ` · Finished ${when(p.end)} · ${span(p.start, p.end) || '< 1 min'}` : ''}</div>}
+              {p.appr && <div className="sub"><b>Approved by {p.appr.by}</b>{p.cost !== undefined ? ` · cost ${f2(p.cost)}` : ''}{p.appr.note ? ` · ${p.appr.note}` : ''}</div>}
+              {p.st === 'pending' && !prevDone && <div className="sub">Locked until the previous rework stage is approved.</div>}
+              {p.st === 'pending' && prevDone && s.st === 'active' && <div className="chips" style={{ marginTop: 6 }}><button className="btn" onClick={() => act(s.k, 'rwStep', { sub: 'start', step: p.k })}>Start stage</button></div>}
+              {p.st === 'active' && s.st === 'active' && <RwStepForm key={p.k} p={p} s={s} last={last} spent={spent} act={act} />}
+            </div>
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -241,7 +307,7 @@ export function ProductionStages() {
   const planned = c.gp, projected = c.gp - extra
   const prog = progress({ stages: st }), approved = st.filter((s) => s.st === 'done' && !s.rw).length, total = st.filter((s) => !s.rw).length
   const p = phase(S, o), cur = st.find((s) => !isDone(s)), shown = openKey === undefined ? (cur && cur.k) : openKey
-  const act = (k, op, x = {}) => { setOpenKey(undefined); dispatch({ type: op === 'rework' ? 'rework' : op === 'reworkDone' ? 'reworkDone' : op === 'reopen' ? 'reopen' : 'stage', jc: o.jc, k, op, ...x, ...(op === 'reworkDone' ? { actual: x.actual } : {}) }) }
+  const act = (k, op, x = {}) => { setOpenKey(undefined); dispatch({ type: ['rework', 'reworkDone', 'reopen', 'rwStep', 'rwPlan'].includes(op) ? op : 'stage', jc: o.jc, k, op, ...x, ...(op === 'reworkDone' ? { actual: x.actual } : {}) }) }
   const trail = S.audit.filter((a) => a.o === o.jc).slice(0, 8)
   const byType = RESP_TYPES.map((t) => [t, sum(rws.filter((s) => s.rw.whoType === t), (s) => +(s.rw.act ?? s.rw.est) || 0)]).filter(([, v]) => v > 0)
   const maxT = Math.max(...byType.map(([, v]) => v), 1)
@@ -305,6 +371,7 @@ export function ProductionStages() {
                         <div className="ps-rwh"><b>{rw.id}</b><span className={'tag ' + (rs === 'done' ? 'g' : 'a')}>{rs === 'done' ? 'Resolved' : 'Open'}</span></div>
                         <div>{rw.fault ? <b>{rw.fault}: </b> : null}{rw.what}</div>
                         <div className="sub">{rw.found}: {rw.happened}</div>
+                        {rw.steps?.length ? <div className="sub">{rw.steps.filter((y) => y.st === 'done').length} of {rw.steps.length} rework stages approved</div> : null}
                         <div className="ps-rwf"><span>{rw.who} · {rw.whoType}</span><b>{f2(rw.act ?? rw.est)}</b></div>
                       </div>
                     ) })}
