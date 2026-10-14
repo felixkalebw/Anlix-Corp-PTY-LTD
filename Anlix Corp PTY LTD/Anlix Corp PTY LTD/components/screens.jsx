@@ -2,7 +2,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { useParams, useRouter } from 'next/navigation'
-import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, CartesianGrid, PieChart, Pie, Cell, LabelList } from 'recharts'
+import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, CartesianGrid, PieChart, Pie, Cell, LabelList, ComposedChart, Line } from 'recharts'
 import { useApp } from './Store'
 import { supabase } from '@/lib/supabase'
 import { TODAY, f2, f0, pc, fd, sum, sz, cost, price, qty, calc, unit, alerts, snapshot, costParts, jobNo, COST_N, STAGES, mkStages, isDone, progress, overdue, phase, phaseTag } from '@/lib/model'
@@ -52,93 +52,114 @@ const Kpi = ({ title, value, sub, n = 2 }) => (<section className={'pb-tile pb-k
 const Funnel = ({ rows }) => { const mx = Math.max(...rows.map((r) => r.v), 1); return rows.map((r) => (
   <div className="pb-fun" key={r.k}><span>{r.k}</span><div className="mt"><div className="mb" style={{ width: (r.v ? Math.max(3, (r.v / mx) * 100) : 0) + '%' }} /></div><b>{r.v}</b></div>)) }
 
+const RAINBOW = ['#E6007E', '#00A3E0', '#FFC20E', '#2BB673', '#7B4DFF', '#FF6B2C', '#14B8A6', '#EF4444', '#8B5CF6', '#0EA5E9', '#F59E0B', '#10B981', '#EC4899', '#6366F1']
+const COL = { rev: '#00A3E0', cost: '#FF6B2C', gp: '#2BB673', net: '#7B4DFF', oh: '#FFC20E', spend: '#E6007E' }
+const Kc = ({ title, value, sub, color, dark }) => (
+  <section className="pb-tile pb-kpi pb-c2" style={{ background: color, borderColor: color, color: dark ? '#1A1A1A' : '#fff' }}>
+    <h3>{title}</h3><div className="pb-sub" style={{ color: dark ? '#3A3000' : 'rgba(255,255,255,.88)' }}>{sub || '\u00a0'}</div>
+    <div className="pb-big" style={{ fontSize: 26, fontWeight: 600 }}>{value}</div>
+  </section>
+)
+const isoD = (d) => d.toISOString().slice(0, 10)
+// Calendar weeks, Monday to Sunday, cut at the month ends so the weeks add up exactly to the month
+function weeksOf(m) {
+  const y = +m.slice(0, 4), mo = +m.slice(5, 7) - 1, last = new Date(Date.UTC(y, mo + 1, 0)).getUTCDate(), out = []
+  let st = 1
+  while (st <= last) {
+    const dt = new Date(Date.UTC(y, mo, st)), dow = (dt.getUTCDay() + 6) % 7, en = Math.min(last, st + (6 - dow))
+    out.push({ s: isoD(dt), e: isoD(new Date(Date.UTC(y, mo, en))), a: st, b: en })
+    st = en + 1
+  }
+  return out
+}
+const kfmt = (v) => 'P' + (Math.abs(v) >= 1000 ? Math.round(v / 100) / 10 + 'k' : Math.round(v))
+
 export function Dashboard() {
   const { S } = useApp()
-  const [m, setM] = useState(TODAY.slice(0, 7)), [wk, setWk] = useState(0), [dr, setDr] = useState(null)
-  const wkOf = (d) => Math.min(4, Math.ceil(+d.slice(8) / 7))
-  const inP = (d) => d.startsWith(m) && (!wk || wkOf(d) === wk)
-  const months = [...new Set([TODAY.slice(0, 7), ...S.orders.map((o) => o.date.slice(0, 7)), ...S.over.map((x) => x.d.slice(0, 7))])].sort().reverse()
-  const ord = S.orders.filter((o) => inP(o.date)), mo = S.orders.filter((o) => o.date.startsWith(m))
-  const pays = S.orders.flatMap((o) => o.pays).filter((p) => p.d.startsWith(m))
-  const rev = sum(pays.filter((p) => inP(p.d)), (p) => p.amt), cs = sum(ord, (o) => calc(S, o).cs), gp = sum(ord, (o) => calc(S, o).gp)
-  const ov = sum(S.over.filter((x) => inP(x.d)), (x) => x.a), ovM = sum(S.over.filter((x) => x.d.startsWith(m)), (x) => x.a)
-  const shirts = sum(mo, qty), gpM = sum(mo, (o) => calc(S, o).gp), avg = shirts ? gpM / shirts : 0, be = avg > 0 && ovM > 0 ? Math.ceil(ovM / avg) : 0
-  const out = S.orders.reduce((t, o) => t + Math.max(0, calc(S, o).bal), 0), nShirts = sum(ord, qty)
-  const { jobs, comp } = costParts(S, ord), dir = sum(comp, (x) => x), full = dir + ov, top = comp.indexOf(Math.max(...comp))
-  const WK = ['Days 1–7', 'Days 8–14', 'Days 15–21', 'Day 22 on']
-  const wrev = WK.map((n, i) => ({ n, v: sum(pays.filter((p) => wkOf(p.d) === i + 1), (p) => p.amt) }))
-  const wsh = WK.map((n, i) => { const os = mo.filter((o) => wkOf(o.date) === i + 1), by = (c) => sum(os, (o) => sum(o.lines.filter((l) => sz(S, l.s)?.c === c), (l) => l.q)); return { n, Adult: by('adult'), Kids: by('kids') } })
-  const PH = ['Awaiting payment', 'Ready to start production', 'Artwork pending', 'In production', 'Quality hold', 'Ready for collection', 'Completed']
-  const ph = (o) => { const p = phase(S, o); return p.startsWith('Awaiting') ? 'Awaiting payment' : p }
-  const pipe = PH.map((k) => ({ k, v: ord.filter((o) => ph(o) === k).length }))
-  const mix = [...months].sort().slice(-6).map((x) => { const cm = costParts(S, S.orders.filter((o) => o.date.startsWith(x))).comp
-    return { n: new Date(x + '-01T00:00').toLocaleDateString('en-GB', { month: 'short' }), ...Object.fromEntries(COST_N.map((k, i) => [k, cm[i]])) } })
-  const msz = S.sizes.map((z) => { const c = cost(S, z), a = S.T[z.c]; return { n: z.n, small: +(((a[0] - c) / a[0]) * 100).toFixed(1), bulk: +(((a[1] - c) / a[1]) * 100).toFixed(1) } })
-  const byEnt = Object.entries(ord.reduce((t, o) => ({ ...t, [o.ent]: (t[o.ent] || 0) + calc(S, o).net }), {})).map(([n, v]) => ({ n, v })).sort((a, b) => b.v - a.v).slice(0, 8)
-  const rows = [...COST_N, 'Allocated overhead'].map((n, i) => ({ n, v: i < 6 ? comp[i] : ov }))
+  const [m, setM] = useState(TODAY.slice(0, 7)), [wk, setWk] = useState(0)
+  const W = weeksOf(m), wi = wk > W.length ? 0 : wk
+  const r0 = wi ? W[wi - 1].s : W[0].s, r1 = wi ? W[wi - 1].e : W[W.length - 1].e
+  const inR = (d, a = r0, b = r1) => d >= a && d <= b
+  const pays = S.orders.flatMap((o) => o.pays.map((p) => ({ ...p, jc: o.jc })))
+  const months = [...new Set([TODAY.slice(0, 7), m, ...S.orders.map((o) => o.date.slice(0, 7)), ...pays.map((p) => p.d.slice(0, 7)), ...S.over.map((x) => x.d.slice(0, 7))])].sort().reverse()
+
+  // This period only: revenue by payment date, orders by the date they were received, overheads by their own date
+  const ord = S.orders.filter((o) => inR(o.date)), pys = pays.filter((p) => inR(p.d)), ovs = S.over.filter((x) => inR(x.d))
+  const rev = sum(pys, (p) => p.amt), cs = sum(ord, (o) => calc(S, o).cs), gp = sum(ord, (o) => calc(S, o).gp), ov = sum(ovs, (x) => x.a), net = gp - ov
+  const n = ord.length, shirts = sum(ord, qty)
+
+  const wkData = W.map((w, i) => {
+    const a = S.orders.filter((o) => inR(o.date, w.s, w.e)), g = sum(a, (o) => calc(S, o).gp), o2 = sum(S.over.filter((x) => inR(x.d, w.s, w.e)), (x) => x.a)
+    return { n: 'Wk ' + (i + 1), Revenue: sum(pays.filter((p) => inR(p.d, w.s, w.e)), (p) => p.amt), 'Production cost': sum(a, (o) => calc(S, o).cs), 'Gross profit': g, 'Net profit': g - o2 }
+  })
+  const days = []
+  for (let t = new Date(r0 + 'T00:00:00Z'); isoD(t) <= r1; t = new Date(t.getTime() + 864e5)) days.push(isoD(t))
+  const dayData = days.map((d) => ({ n: String(+d.slice(8)), Revenue: sum(pys.filter((p) => p.d === d), (p) => p.amt), 'Production cost': sum(ord.filter((o) => o.date === d), (o) => calc(S, o).cs), Overheads: sum(ovs.filter((x) => x.d === d), (x) => x.a) }))
+  const po = ord.map((o) => { const c = calc(S, o); return { n: o.jc.slice(-4) + ' ' + String(o.ent).slice(0, 12), 'Production cost': +c.cs.toFixed(2), 'Overhead share': shirts ? +((ov * c.q) / shirts).toFixed(2) : 0 } })
+  const comp = costParts(S, ord).comp, split = COST_N.map((k, i) => ({ k, v: comp[i] })).filter((x) => x.v > 0)
+  const en = {}; pys.forEach((p) => { const k = p.ent || '–'; en[k] = (en[k] || 0) + p.amt })
+  const payers = Object.entries(en).map(([k, v]) => ({ k, v }))
+  const mo = S.orders.filter((o) => inR(o.date, W[0].s, W[W.length - 1].e)), sold = sum(mo, qty), tgp = sum(mo, (o) => calc(S, o).gp)
+  const ovM = sum(S.over.filter((x) => inR(x.d, W[0].s, W[W.length - 1].e)), (x) => x.a)
+  const avg = sold ? tgp / sold : sum(S.sizes, (z) => S.T[z.c][1] - cost(S, z)) / S.sizes.length, be = avg > 0 && ovM > 0 ? Math.ceil(ovM / avg) : 0
+  const sizeData = S.sizes.map((z) => { const c = cost(S, z), p = S.T[z.c][1]; return { n: z.n, Cost: +c.toFixed(2), Margin: +(((p - c) / p) * 100).toFixed(1) } })
+  const owing = S.orders.map((o) => ({ n: o.jc.slice(-4) + ' ' + String(o.ent).slice(0, 12), Balance: +calc(S, o).bal.toFixed(2) })).filter((x) => x.Balance > 0.005)
   const empty = (t) => <p className="sub">{t}</p>
+  const money = (v) => f2(v)
+
   return (
     <>
-      <Head title="Dashboard" sub="Orders, payments, costs and margins" />
+      <Head title="Dashboard" sub="Weekly, daily and per-order figures" />
       <div className="chips">
-        <select aria-label="Month" value={m} onChange={(e) => setM(e.target.value)} style={{ width: 'auto', marginTop: 0 }}>
+        <select aria-label="Month" value={m} onChange={(e) => { setM(e.target.value); setWk(0) }} style={{ width: 'auto', marginTop: 0 }}>
           {months.map((x) => <option key={x} value={x}>{new Date(x + '-01T00:00').toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })}</option>)}
         </select>
-        {['Whole month', ...WK].map((x, i) => <button key={x} className={'chip' + (wk === i ? ' on' : '')} onClick={() => setWk(i)}>{x}</button>)}
+        {['Whole month', ...W.map((w, i) => `Wk ${i + 1} · ${w.a}–${w.b}`)].map((x, i) => <button key={x} className={'chip' + (wi === i ? ' on' : '')} onClick={() => setWk(i)}>{x}</button>)}
       </div>
       <div className="pb-tiles">
-        <Kpi title="Orders" sub="In period" value={ord.length} />
-        <Kpi title="Shirts" sub="Ordered" value={nShirts} />
-        <Kpi title="Revenue received" sub="By payment date" value={f0(rev)} />
-        <Kpi title="Production cost" sub="Direct cost" value={f0(cs)} />
-        <Kpi title="Gross profit" sub="Net sales less cost" value={f0(gp)} />
-        <Kpi title="Outstanding balance" sub="All open invoices" value={f0(out)} />
+        <Kc title="Revenue received" sub="Payments dated in this period" value={money(rev)} color={COL.rev} />
+        <Kc title="Production cost" sub={`${n} orders received`} value={money(cs)} color="#D4460C" />
+        <Kc title="Gross profit" sub="Same orders" value={money(gp)} color="#1B8A55" />
+        <Kc title="Overheads" sub="Dated in this period" value={money(ov)} color={COL.oh} dark />
+        <Kc title="Net profit" sub="After overheads" value={money(net)} color={net < 0 ? '#C62828' : '#6A3FE0'} />
+        <Kc title="Spend per order" sub={`${shirts} shirts`} value={money(n ? (cs + ov) / n : 0)} color="#C4006C" />
 
-        <Tile n={3} title="Revenue received" sub="By week of month">
-          <ResponsiveContainer width="100%" height={210}><BarChart data={wrev} margin={{ top: 16 }}><XAxis dataKey="n" {...AX} /><YAxis {...AX} width={46} tickFormatter={(v) => 'P' + (v >= 1000 ? v / 1000 + 'k' : v)} />
-            <Tooltip {...TT} formatter={(v) => f2(v)} /><Bar dataKey="v" name="Revenue" fill={PBI[0]}><LabelList dataKey="v" position="top" formatter={(v) => (v ? f0(v) : '')} {...LBL} /></Bar></BarChart></ResponsiveContainer></Tile>
-        <Tile n={3} title="Shirts ordered" sub="By week, adult and kids">
-          <ResponsiveContainer width="100%" height={210}><BarChart data={wsh} margin={{ top: 16 }}><XAxis dataKey="n" {...AX} /><YAxis {...AX} width={34} allowDecimals={false} /><Tooltip {...TT} /><Legend iconSize={10} />
-            <Bar dataKey="Adult" fill={PBI[0]} /><Bar dataKey="Kids" fill={PBI[1]} /></BarChart></ResponsiveContainer></Tile>
-        <Tile n={3} title="Orders" sub="By status">
-          {ord.length ? <ResponsiveContainer width="100%" height={210}><PieChart><Pie data={pipe.filter((x) => x.v)} dataKey="v" nameKey="k" outerRadius={62} label={(e) => e.value}>
-            {pipe.filter((x) => x.v).map((x, i) => <Cell key={x.k} fill={PBI[i % 7]} />)}</Pie><Tooltip {...TT} /><Legend iconSize={10} wrapperStyle={{ fontSize: 11 }} /></PieChart></ResponsiveContainer> : empty('No orders in this period.')}</Tile>
-        <Tile n={3} title="Break-even" sub="This month, including overheads">
-          <div className="pb-big" style={{ fontSize: 34, minHeight: 90, justifyContent: 'center' }}>{be ? be + ' shirts' : 'Not enough data'}</div>
-          <div className="mt"><div className="mb" style={{ width: (be ? Math.min(100, (shirts / be) * 100) : 0) + '%' }} /></div>
-          <div className="sub">{shirts} sold{be ? (shirts >= be ? `, ${shirts - be} above` : `, ${be - shirts} to go`) : ''}. Overheads {f0(ovM)} ÷ {f2(avg)} gross profit per shirt.</div></Tile>
+        <Tile n={12} title="Week by week" sub="Revenue, production cost, gross profit and net profit for each week of the month">
+          <ResponsiveContainer width="100%" height={300}><BarChart data={wkData} margin={{ top: 10 }}><CartesianGrid vertical={false} stroke="var(--line)" />
+            <XAxis dataKey="n" {...AX} /><YAxis {...AX} width={52} tickFormatter={kfmt} /><Tooltip {...TT} formatter={money} /><Legend iconSize={10} />
+            <Bar dataKey="Revenue" fill={COL.rev} radius={[4, 4, 0, 0]} /><Bar dataKey="Production cost" fill={COL.cost} radius={[4, 4, 0, 0]} />
+            <Bar dataKey="Gross profit" fill={COL.gp} radius={[4, 4, 0, 0]} /><Bar dataKey="Net profit" fill={COL.net} radius={[4, 4, 0, 0]} /></BarChart></ResponsiveContainer></Tile>
+        <Tile n={12} title="Day by day" sub="Inside the selected period">
+          <ResponsiveContainer width="100%" height={260}><BarChart data={dayData} margin={{ top: 10 }}><CartesianGrid vertical={false} stroke="var(--line)" />
+            <XAxis dataKey="n" {...AX} interval={0} /><YAxis {...AX} width={52} tickFormatter={kfmt} /><Tooltip {...TT} formatter={money} labelFormatter={(l) => 'Day ' + l} /><Legend iconSize={10} />
+            <Bar dataKey="Revenue" fill={COL.rev} radius={[3, 3, 0, 0]} /><Bar dataKey="Production cost" fill={COL.cost} radius={[3, 3, 0, 0]} /><Bar dataKey="Overheads" fill={COL.oh} radius={[3, 3, 0, 0]} /></BarChart></ResponsiveContainer></Tile>
 
-        <Tile n={4} title="Cost mix" sub="By month and cost category, 100% stacked">
-          {mix.length ? <ResponsiveContainer width="100%" height={360}><BarChart data={mix} stackOffset="expand"><XAxis dataKey="n" {...AX} /><YAxis {...AX} width={44} tickFormatter={(v) => Math.round(v * 100) + '%'} />
-            <Tooltip {...TT} formatter={(v) => f2(v)} /><Legend iconSize={10} wrapperStyle={{ fontSize: 11 }} />{COST_N.map((k, i) => <Bar key={k} dataKey={k} stackId="a" fill={PBI[i]} />)}</BarChart></ResponsiveContainer> : empty('No data yet.')}</Tile>
-        <Tile n={5} title="Margin by size" sub={`By size, under ${S.thr} shirts and ${S.thr}+ shirts`}>
-          <ResponsiveContainer width="100%" height={Math.max(300, msz.length * 34)}><BarChart data={msz} layout="vertical" margin={{ right: 40 }}><CartesianGrid horizontal={false} stroke="var(--line)" />
-            <XAxis type="number" {...AX} unit="%" /><YAxis type="category" dataKey="n" {...AX} width={66} interval={0} /><Tooltip {...TT} formatter={(v) => v + '%'} /><Legend iconSize={10} />
-            <Bar dataKey="small" name={`Under ${S.thr}`} fill={PBI[0]} barSize={10}><LabelList dataKey="small" position="right" formatter={(v) => v + '%'} {...LBL} /></Bar>
-            <Bar dataKey="bulk" name={`${S.thr}+`} fill={PBI[2]} barSize={10}><LabelList dataKey="bulk" position="right" formatter={(v) => v + '%'} {...LBL} /></Bar></BarChart></ResponsiveContainer></Tile>
-        <Tile n={3} title="Order pipeline" sub="Orders by stage"><Funnel rows={pipe} /></Tile>
+        <Tile n={5} title="Spend per order" sub="Production cost plus the order's share of overheads">
+          {po.length ? <ResponsiveContainer width="100%" height={Math.max(220, po.length * 38 + 60)}><BarChart data={po} layout="vertical" margin={{ right: 16 }}>
+            <XAxis type="number" {...AX} tickFormatter={kfmt} /><YAxis type="category" dataKey="n" {...AX} width={110} interval={0} /><Tooltip {...TT} formatter={money} /><Legend iconSize={10} />
+            <Bar dataKey="Production cost" stackId="a" fill={COL.cost} /><Bar dataKey="Overhead share" stackId="a" fill={COL.oh} /></BarChart></ResponsiveContainer> : empty('No orders received in this period.')}</Tile>
+        <Tile n={3} title="Where production cost goes" sub="This period">
+          {split.length ? <ResponsiveContainer width="100%" height={250}><PieChart><Pie data={split} dataKey="v" nameKey="k" innerRadius={48} outerRadius={80} paddingAngle={2}>
+            {split.map((x, i) => <Cell key={x.k} fill={RAINBOW[i % RAINBOW.length]} />)}</Pie><Tooltip {...TT} formatter={money} /><Legend iconSize={10} wrapperStyle={{ fontSize: 11 }} /></PieChart></ResponsiveContainer> : empty('No orders in this period.')}</Tile>
+        <Tile n={4} title="Revenue by payer" sub="Payments in this period">
+          {payers.length ? <ResponsiveContainer width="100%" height={250}><PieChart><Pie data={payers} dataKey="v" nameKey="k" innerRadius={48} outerRadius={80} paddingAngle={2}>
+            {payers.map((x, i) => <Cell key={x.k} fill={RAINBOW[(i + 1) % RAINBOW.length]} />)}</Pie><Tooltip {...TT} formatter={money} /><Legend iconSize={10} wrapperStyle={{ fontSize: 11 }} /></PieChart></ResponsiveContainer> : empty('No payments in this period.')}</Tile>
 
-        <Tile n={4} title="Net sales" sub="By customer">
-          {byEnt.length ? <ResponsiveContainer width="100%" height={Math.max(180, byEnt.length * 38)}><BarChart data={byEnt} layout="vertical" margin={{ right: 70 }}><XAxis type="number" hide /><YAxis type="category" dataKey="n" {...AX} width={90} interval={0} />
-            <Tooltip {...TT} formatter={(v) => f2(v)} /><Bar dataKey="v" name="Net sales" fill={PBI[0]} barSize={16}><LabelList dataKey="v" position="right" formatter={(v) => f0(v)} {...LBL} /></Bar></BarChart></ResponsiveContainer> : empty('No orders in this period.')}</Tile>
-        <Tile n={5} title="Cost breakdown" sub="By category in Pula, select a bar for its jobs">
-          <ResponsiveContainer width="100%" height={300}><BarChart data={rows} layout="vertical" margin={{ right: 120 }}><XAxis type="number" hide /><YAxis type="category" dataKey="n" {...AX} width={140} interval={0} />
-            <Tooltip {...TT} formatter={(v) => f2(v)} /><Bar dataKey="v" name="Cost" barSize={18} cursor="pointer" onClick={(_d, i) => setDr(i)}>{rows.map((r, i) => <Cell key={r.n} fill={PBI[i % 7]} />)}
-              <LabelList dataKey="v" position="right" formatter={(v) => `${f2(v)} · ${full ? Math.round((v / full) * 100) : 0}%`} {...LBL} /></Bar></BarChart></ResponsiveContainer>
-          <div className="sub">{dir > 0 ? `Biggest driver: ${COST_N[top]}, ${Math.round((comp[top] / dir) * 100)}% of direct cost.` : 'No orders in this period.'} Full cost per shirt {nShirts ? f2(full / nShirts) : '–'}.</div></Tile>
-        <div className="pb-c3 pb-stack">
-          <Kpi n={3} title="Net profit" sub="After overheads" value={wk ? 'Whole month' : f0(gp - ov)} />
-          <Kpi n={3} title="Full cost per job" sub="Direct cost plus overhead" value={ord.length ? f0(full / ord.length) : '–'} />
-        </div>
-
-        {dr !== null && (
-          <Tile n={12} title={dr < 6 ? COST_N[dr] + ': jobs behind this figure' : 'Allocated overhead'} sub="Drill-down">
-            {dr === 6 ? <p className="sub">Overhead of {f2(ov)} recorded in this period is shared across {nShirts} shirts.</p> : jobs.filter((j) => j.v[dr] > 0).length ? (
-              <Table head={['Job card', 'Customer', 'Shirts', 'Amount']} right={2}>
-                {jobs.filter((j) => j.v[dr] > 0).map((j) => <tr key={j.o.jc}><td><Link href={'/orders/' + j.o.jc}>{j.o.jc}</Link></td><td>{j.o.ent}</td><td className="r">{j.sh}</td><td className="r">{f2(j.v[dr])}</td></tr>)}
-              </Table>) : <p className="sub">Nothing recorded here for this period. Record an expense with the job card number as its reference.</p>}
-          </Tile>)}
-        <Tile n={12} title="Orders" sub="In this period">{ord.length ? <OrdersTable list={ord} /> : empty('No orders in this period.')}</Tile>
+        <Tile n={3} title="Break-even" sub="Whole month, overheads included">
+          {be ? (<div style={{ position: 'relative' }}>
+            <ResponsiveContainer width="100%" height={170}><PieChart><Pie data={[{ v: Math.min(sold, be) }, { v: Math.max(be - sold, 0) }]} dataKey="v" startAngle={180} endAngle={0} cy="90%" innerRadius="75%" outerRadius="105%" stroke="none">
+              <Cell fill={COL.gp} /><Cell fill="var(--line)" /></Pie></PieChart></ResponsiveContainer>
+            <div style={{ position: 'absolute', left: 0, right: 0, bottom: 4, textAlign: 'center' }}><b style={{ fontSize: 24 }}>{sold} / {be}</b><div className="sub">shirts sold</div></div></div>) : empty('Add overheads for this month to see break-even.')}</Tile>
+        <Tile n={5} title="Cost per shirt and margin by size" sub="Margin at the quantity price">
+          <ResponsiveContainer width="100%" height={260}><ComposedChart data={sizeData}><CartesianGrid vertical={false} stroke="var(--line)" />
+            <XAxis dataKey="n" {...AX} interval={0} angle={-35} textAnchor="end" height={54} /><YAxis yAxisId="l" {...AX} width={46} tickFormatter={kfmt} /><YAxis yAxisId="r" orientation="right" {...AX} width={40} unit="%" />
+            <Tooltip {...TT} formatter={(v, name) => (name === 'Margin' ? v + '%' : money(v))} /><Legend iconSize={10} />
+            <Bar yAxisId="l" dataKey="Cost" radius={[4, 4, 0, 0]}>{sizeData.map((x, i) => <Cell key={x.n} fill={RAINBOW[i % RAINBOW.length]} />)}</Bar>
+            <Line yAxisId="r" dataKey="Margin" stroke="#E6007E" strokeWidth={2.5} dot={{ r: 4, fill: '#E6007E' }} /></ComposedChart></ResponsiveContainer></Tile>
+        <Tile n={4} title="Outstanding balances" sub="All open invoices">
+          {owing.length ? <ResponsiveContainer width="100%" height={Math.max(220, owing.length * 38 + 50)}><BarChart data={owing} layout="vertical" margin={{ right: 16 }}>
+            <XAxis type="number" {...AX} tickFormatter={kfmt} /><YAxis type="category" dataKey="n" {...AX} width={110} interval={0} /><Tooltip {...TT} formatter={money} />
+            <Bar dataKey="Balance" radius={[0, 4, 4, 0]}>{owing.map((x, i) => <Cell key={x.n} fill={RAINBOW[i % RAINBOW.length]} />)}</Bar></BarChart></ResponsiveContainer> : empty('All invoices are paid.')}</Tile>
       </div>
     </>
   )
@@ -390,8 +411,10 @@ export function Assistant() {
   const ask = async () => {
     if (!q.trim()) return setErr('Type or choose a question first.')
     setBusy(true); setErr(''); setAns('')
-    const { data, error } = await supabase.functions.invoke('ai-manager', { body: { question: q.trim(), snapshot: snapshot(S) } })
-    if (error || !data?.answer) setErr('The assistant could not answer: ' + (error?.message || data?.error || 'no answer returned'))
+    const { data, error } = await supabase.functions.invoke('ask-luna', { body: { question: q.trim(), snapshot: snapshot(S) } })
+    let msg = error?.message || data?.error || 'no answer returned'
+    if (error?.context?.json) { try { msg = (await error.context.json()).error || msg } catch {} }
+    if (error || !data?.answer) setErr('The assistant could not answer: ' + msg)
     else setAns(data.answer)
     setBusy(false)
   }
