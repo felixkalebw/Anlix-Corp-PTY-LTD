@@ -30,23 +30,10 @@ export function invoiceStatus(o, c) {
 }
 
 const Logo = () => (
-  <svg width="270" height="100" viewBox="0 0 270 100" role="img" aria-label="Anlix">
-    <polygon points="40,0 80,78 70,78 40,18 18,62 28,62 36,78 0,78" fill="#000" />
-    <polygon points="0,78 28,78 14,50" fill="#000" />
-    <text x="70" y="78" fontFamily="Helvetica,Arial,sans-serif" fontWeight="700" fontSize="84" letterSpacing="-2" fill="#000">nlix</text>
-  </svg>
+  <img src="/logo.png" alt="Anlix Corp logo" width="270" height="99" style={{ display: 'block', width: 270, height: 'auto' }} />
 )
 const Stamp = () => (
-  <svg width="190" height="190" viewBox="0 0 190 190" role="img" aria-label="Anlix Corp stamp" style={{ transform: 'rotate(-6deg)' }}>
-    <defs><path id="inv-ta" d="M30,95 A65,65 0 0 1 160,95" /><path id="inv-tb" d="M24,95 A71,71 0 0 0 166,95" /></defs>
-    <circle cx="95" cy="95" r="90" fill="none" stroke="#000" strokeWidth="3" />
-    <circle cx="95" cy="95" r="52" fill="none" stroke="#000" strokeWidth="1" />
-    <text fontFamily="Helvetica,Arial,sans-serif" fontWeight="700" fontSize="15" letterSpacing="2"><textPath href="#inv-ta" startOffset="50%" textAnchor="middle">ANLIX CORP (PTY) LTD</textPath></text>
-    <text fontFamily="Helvetica,Arial,sans-serif" fontWeight="700" fontSize="10.5" letterSpacing="1.5"><textPath href="#inv-tb" startOffset="50%" textAnchor="middle">• TLOKWENG, GABORONE, BOTSWANA •</textPath></text>
-    <text x="95" y="92" textAnchor="middle" fontFamily="Helvetica,Arial,sans-serif" fontWeight="700" fontSize="11">Tel: 76 675 006</text>
-    <line x1="55" y1="99" x2="135" y2="99" stroke="#000" strokeWidth=".8" />
-    <text x="95" y="111" textAnchor="middle" fontFamily="Helvetica,Arial,sans-serif" fontWeight="700" fontSize="8">anlixbw@gmail.com</text>
-  </svg>
+  <img src="/stamp.png" alt="Anlix Corp stamp" width="190" height="190" style={{ display: 'block', width: 190, height: 190, transform: 'rotate(-6deg)' }} />
 )
 
 const CSS = `
@@ -72,6 +59,7 @@ const CSS = `
 .inv-stamp{display:flex;justify-content:flex-end;margin-top:14px;padding-right:16px}
 .inv-foot{margin-top:auto;border-top:1px solid #000;padding-top:9px;text-align:center;font-size:10.5px}
 @media print{
+ .inv-sheet img{-webkit-print-color-adjust:exact;print-color-adjust:exact}
  @page{size:A4;margin:0}
  body *{visibility:hidden}
  .inv-wrap,.inv-wrap *{visibility:visible}
