@@ -10,7 +10,7 @@ const NAV = [
   ['/orders', 'Orders', 'orders.view'],
   ['/new', 'New order', 'orders.edit'],
   ['/payments', 'Payments', 'payments.view'],
-  ['/documents', 'Quotations & invoices', 'documents.view'],
+  ['/app/documents', 'Quotations & invoices', 'documents.view'],
   ['/costing', 'Costing and prices', 'reports.view'],
   ['/overheads', 'Overheads', 'finance.view'],
   ['/audit', 'Audit log', 'audit.view'],
