@@ -2,9 +2,10 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { useParams, useRouter } from 'next/navigation'
+import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, CartesianGrid, PieChart, Pie, Cell, LabelList } from 'recharts'
 import { useApp } from './Store'
 import { supabase } from '@/lib/supabase'
-import { TODAY, f2, f0, pc, fd, sum, sz, cost, price, qty, calc, stat, unit, alerts, snapshot, costParts, jobNo, COST_N } from '@/lib/model'
+import { TODAY, f2, f0, pc, fd, sum, sz, cost, price, qty, calc, unit, alerts, snapshot, costParts, jobNo, COST_N, STAGES, mkStages, isDone, progress, overdue, phase, phaseTag } from '@/lib/model'
 
 const Head = ({ title, sub }) => {
   const { S, dispatch } = useApp()
@@ -23,30 +24,33 @@ const Table = ({ head, right = 99, children }) => (
     <tbody>{children}</tbody>
   </table></div>
 )
-const Tag = ({ o }) => { const { S } = useApp(); const [t, k] = stat(S, o); return <span className={'tag ' + k}>{t}</span> }
-const Bar = ({ label, v, max, right, lo, cols, onClick }) => (
-  <div className="mr" style={cols && { gridTemplateColumns: cols }} role={onClick ? 'button' : undefined} tabIndex={onClick ? 0 : undefined}
-    onClick={onClick} onKeyDown={onClick && ((e) => e.key === 'Enter' && onClick())}>
-    <span>{label}</span>
-    <div className="mt"><div className={'mb' + (lo ? ' lo' : '')} style={{ width: Math.max(2, (v / (max || 1)) * 100) + '%' }} /></div>
-    <span>{right}</span>
-  </div>
-)
-const Num = ({ label, value, onSave }) => (
-  <label>{label}<input type="number" step="any" min="0" defaultValue={value} key={value} onBlur={(e) => onSave(parseFloat(e.target.value) || 0)} /></label>
+const Tag = ({ o }) => { const { S } = useApp(); const p = phase(S, o); return <span className={'tag ' + phaseTag(p)}>{p}</span> }
+const Num = ({ label, value, onSave, ro }) => (
+  <label>{label}<input type="number" step="any" min="0" disabled={ro} defaultValue={value} key={value} onBlur={(e) => onSave(parseFloat(e.target.value) || 0)} /></label>
 )
 
 function OrdersTable({ list }) {
   const { S } = useApp()
   return (
-    <Table head={['Job card', 'Date', 'Received by', 'Placed by', 'Entity', 'Shirts', 'Net total', 'Balance', 'Status']} right={5}>
-      {list.map((o) => { const c = calc(S, o); return (
-        <tr key={o.jc}><td><Link href={'/orders/' + o.jc}>{o.jc}</Link></td><td>{fd(o.date)}</td><td>{o.by}</td><td>{o.placed}</td><td>{o.ent}</td>
-          <td className="r">{c.q}</td><td className="r">{f2(c.net)}</td><td className="r">{f2(c.bal)}</td><td><Tag o={o} /></td></tr>
+    <Table head={['Job card', 'Date', 'Due', 'Placed by', 'Entity', 'Shirts', 'Net total', 'Balance', 'Progress', 'Status']} right={5}>
+      {list.map((o) => { const c = calc(S, o), p = progress(o); return (
+        <tr key={o.jc}><td><Link href={'/orders/' + o.jc}>{o.jc}</Link></td><td>{fd(o.date)}</td>
+          <td style={overdue(o) ? { color: 'var(--warn)', fontWeight: 600 } : undefined}>{o.dueDate ? fd(o.dueDate) : '–'}</td><td>{o.placed}</td><td>{o.ent}</td>
+          <td className="r">{c.q}</td><td className="r">{f2(c.net)}</td><td className="r">{f2(c.bal)}</td>
+          <td style={{ minWidth: 90 }}><div className="mt" title={p + '%'}><div className="mb" style={{ width: p + '%' }} /></div></td><td><Tag o={o} /></td></tr>
       ) })}
     </Table>
   )
 }
+
+const PBI = ['#01B8AA', '#374649', '#FD625E', '#F2C80F', '#5F6B6D', '#8AD4EB', '#A66999']
+const AX = { tick: { fill: 'var(--mut)', fontSize: 12 }, axisLine: { stroke: 'var(--line)' }, tickLine: false }
+const TT = { contentStyle: { background: 'var(--card)', border: '1px solid var(--line)', color: 'var(--ink)', borderRadius: 6 }, cursor: { fill: 'rgba(128,128,128,.12)' } }
+const LBL = { fill: 'var(--ink)', fontSize: 11 }
+const Tile = ({ n, title, sub, children }) => (<section className={'pb-tile pb-c' + n}><h3>{title}</h3><div className="pb-sub">{sub || '\u00a0'}</div>{children}</section>)
+const Kpi = ({ title, value, sub, n = 2 }) => (<section className={'pb-tile pb-kpi pb-c' + n}><h3>{title}</h3><div className="pb-sub">{sub || '\u00a0'}</div><div className="pb-big">{value}</div></section>)
+const Funnel = ({ rows }) => { const mx = Math.max(...rows.map((r) => r.v), 1); return rows.map((r) => (
+  <div className="pb-fun" key={r.k}><span>{r.k}</span><div className="mt"><div className="mb" style={{ width: (r.v ? Math.max(3, (r.v / mx) * 100) : 0) + '%' }} /></div><b>{r.v}</b></div>)) }
 
 export function Dashboard() {
   const { S } = useApp()
@@ -59,12 +63,20 @@ export function Dashboard() {
   const rev = sum(pays.filter((p) => inP(p.d)), (p) => p.amt), cs = sum(ord, (o) => calc(S, o).cs), gp = sum(ord, (o) => calc(S, o).gp)
   const ov = sum(S.over.filter((x) => inP(x.d)), (x) => x.a), ovM = sum(S.over.filter((x) => x.d.startsWith(m)), (x) => x.a)
   const shirts = sum(mo, qty), gpM = sum(mo, (o) => calc(S, o).gp), avg = shirts ? gpM / shirts : 0, be = avg > 0 && ovM > 0 ? Math.ceil(ovM / avg) : 0
-  const out = S.orders.reduce((t, o) => t + Math.max(0, calc(S, o).bal), 0)
-  const { jobs, comp } = costParts(S, ord), dir = sum(comp, (x) => x), full = dir + ov
-  const rows = [...comp, ov], names = [...COST_N, 'Allocated overhead'], top = comp.indexOf(Math.max(...comp))
-  const wrev = [1, 2, 3, 4].map((w) => sum(pays.filter((p) => wkOf(p.d) === w), (p) => p.amt))
-  const sizes = S.sizes.map((z) => { const c = cost(S, z), p = S.T[z.c][1]; return { n: z.n, c, mg: (p - c) / p } }), lo = Math.min(...sizes.map((x) => x.mg))
-  const nShirts = sum(ord, qty)
+  const out = S.orders.reduce((t, o) => t + Math.max(0, calc(S, o).bal), 0), nShirts = sum(ord, qty)
+  const { jobs, comp } = costParts(S, ord), dir = sum(comp, (x) => x), full = dir + ov, top = comp.indexOf(Math.max(...comp))
+  const WK = ['Days 1–7', 'Days 8–14', 'Days 15–21', 'Day 22 on']
+  const wrev = WK.map((n, i) => ({ n, v: sum(pays.filter((p) => wkOf(p.d) === i + 1), (p) => p.amt) }))
+  const wsh = WK.map((n, i) => { const os = mo.filter((o) => wkOf(o.date) === i + 1), by = (c) => sum(os, (o) => sum(o.lines.filter((l) => sz(S, l.s)?.c === c), (l) => l.q)); return { n, Adult: by('adult'), Kids: by('kids') } })
+  const PH = ['Awaiting payment', 'Ready to start production', 'Artwork pending', 'In production', 'Quality hold', 'Ready for collection', 'Completed']
+  const ph = (o) => { const p = phase(S, o); return p.startsWith('Awaiting') ? 'Awaiting payment' : p }
+  const pipe = PH.map((k) => ({ k, v: ord.filter((o) => ph(o) === k).length }))
+  const mix = [...months].sort().slice(-6).map((x) => { const cm = costParts(S, S.orders.filter((o) => o.date.startsWith(x))).comp
+    return { n: new Date(x + '-01T00:00').toLocaleDateString('en-GB', { month: 'short' }), ...Object.fromEntries(COST_N.map((k, i) => [k, cm[i]])) } })
+  const msz = S.sizes.map((z) => { const c = cost(S, z), a = S.T[z.c]; return { n: z.n, small: +(((a[0] - c) / a[0]) * 100).toFixed(1), bulk: +(((a[1] - c) / a[1]) * 100).toFixed(1) } })
+  const byEnt = Object.entries(ord.reduce((t, o) => ({ ...t, [o.ent]: (t[o.ent] || 0) + calc(S, o).net }), {})).map(([n, v]) => ({ n, v })).sort((a, b) => b.v - a.v).slice(0, 8)
+  const rows = [...COST_N, 'Allocated overhead'].map((n, i) => ({ n, v: i < 6 ? comp[i] : ov }))
+  const empty = (t) => <p className="sub">{t}</p>
   return (
     <>
       <Head title="Dashboard" sub="Orders, payments, costs and margins" />
@@ -72,57 +84,89 @@ export function Dashboard() {
         <select aria-label="Month" value={m} onChange={(e) => setM(e.target.value)} style={{ width: 'auto', marginTop: 0 }}>
           {months.map((x) => <option key={x} value={x}>{new Date(x + '-01T00:00').toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })}</option>)}
         </select>
-        {['Whole month', 'Days 1–7', 'Days 8–14', 'Days 15–21', 'Day 22 on'].map((x, i) => <button key={x} className={'chip' + (wk === i ? ' on' : '')} onClick={() => setWk(i)}>{x}</button>)}
+        {['Whole month', ...WK].map((x, i) => <button key={x} className={'chip' + (wk === i ? ' on' : '')} onClick={() => setWk(i)}>{x}</button>)}
       </div>
-      <div className="kp">
-        {[['Revenue received', f0(rev)], ['Production cost', f0(cs)], ['Gross profit', f0(gp)], ['Net profit after overheads', wk ? 'Whole month only' : f0(gp - ov)], ['Outstanding balance', f0(out)]].map(([l, v]) => (
-          <div className="card" key={l}><div className="sub">{l}</div><div className="kv">{v}</div></div>))}
-      </div>
-      <div className="grid">
-        <div className="card"><h2>Break-even this month</h2><div className="kv">{be ? be + ' shirts' : 'Not enough data'}</div>
-          <div className="sub">Overheads {f0(ovM)} ÷ average gross profit {f2(avg)} per shirt sold</div>
-          <div className="mt" style={{ margin: '14px 0 6px' }}><div className="mb" style={{ width: (be ? Math.min(100, (shirts / be) * 100) : 0) + '%' }} /></div>
-          <div className="sub">{shirts} sold{be ? (shirts >= be ? `, ${shirts - be} above break-even` : `, ${be - shirts} to go`) : ''}</div></div>
-        <div className="card"><h2>Revenue received per week</h2>
-          {wrev.map((v, i) => <Bar key={i} label={'Wk ' + (i + 1)} v={v} max={Math.max(...wrev, 1)} right={f0(v)} />)}</div>
-      </div>
-      <div className="card"><h2>Cost breakdown</h2>
-        {rows.map((v, i) => <Bar key={names[i]} label={names[i]} v={v} max={Math.max(...rows, 1)} cols="170px 1fr 150px" lo={i === 6}
-          right={`${f2(v)} · ${full ? Math.round((v / full) * 100) : 0}%`} onClick={() => setDr(i)} />)}
-        <div className="kp" style={{ marginTop: 12 }}>
-          {[['Direct cost', f2(dir)], ['Full cost with overhead', f2(full)], ['Full cost per shirt', nShirts ? f2(full / nShirts) : '–'], ['Full cost per job', ord.length ? f2(full / ord.length) : '–']].map(([l, v]) => (
-            <div key={l}><div className="sub">{l}</div><b>{v}</b></div>))}
+      <div className="pb-tiles">
+        <Kpi title="Orders" sub="In period" value={ord.length} />
+        <Kpi title="Shirts" sub="Ordered" value={nShirts} />
+        <Kpi title="Revenue received" sub="By payment date" value={f0(rev)} />
+        <Kpi title="Production cost" sub="Direct cost" value={f0(cs)} />
+        <Kpi title="Gross profit" sub="Net sales less cost" value={f0(gp)} />
+        <Kpi title="Outstanding balance" sub="All open invoices" value={f0(out)} />
+
+        <Tile n={3} title="Revenue received" sub="By week of month">
+          <ResponsiveContainer width="100%" height={210}><BarChart data={wrev} margin={{ top: 16 }}><XAxis dataKey="n" {...AX} /><YAxis {...AX} width={46} tickFormatter={(v) => 'P' + (v >= 1000 ? v / 1000 + 'k' : v)} />
+            <Tooltip {...TT} formatter={(v) => f2(v)} /><Bar dataKey="v" name="Revenue" fill={PBI[0]}><LabelList dataKey="v" position="top" formatter={(v) => (v ? f0(v) : '')} {...LBL} /></Bar></BarChart></ResponsiveContainer></Tile>
+        <Tile n={3} title="Shirts ordered" sub="By week, adult and kids">
+          <ResponsiveContainer width="100%" height={210}><BarChart data={wsh} margin={{ top: 16 }}><XAxis dataKey="n" {...AX} /><YAxis {...AX} width={34} allowDecimals={false} /><Tooltip {...TT} /><Legend iconSize={10} />
+            <Bar dataKey="Adult" fill={PBI[0]} /><Bar dataKey="Kids" fill={PBI[1]} /></BarChart></ResponsiveContainer></Tile>
+        <Tile n={3} title="Orders" sub="By status">
+          {ord.length ? <ResponsiveContainer width="100%" height={210}><PieChart><Pie data={pipe.filter((x) => x.v)} dataKey="v" nameKey="k" outerRadius={62} label={(e) => e.value}>
+            {pipe.filter((x) => x.v).map((x, i) => <Cell key={x.k} fill={PBI[i % 7]} />)}</Pie><Tooltip {...TT} /><Legend iconSize={10} wrapperStyle={{ fontSize: 11 }} /></PieChart></ResponsiveContainer> : empty('No orders in this period.')}</Tile>
+        <Tile n={3} title="Break-even" sub="This month, including overheads">
+          <div className="pb-big" style={{ fontSize: 34, minHeight: 90, justifyContent: 'center' }}>{be ? be + ' shirts' : 'Not enough data'}</div>
+          <div className="mt"><div className="mb" style={{ width: (be ? Math.min(100, (shirts / be) * 100) : 0) + '%' }} /></div>
+          <div className="sub">{shirts} sold{be ? (shirts >= be ? `, ${shirts - be} above` : `, ${be - shirts} to go`) : ''}. Overheads {f0(ovM)} ÷ {f2(avg)} gross profit per shirt.</div></Tile>
+
+        <Tile n={4} title="Cost mix" sub="By month and cost category, 100% stacked">
+          {mix.length ? <ResponsiveContainer width="100%" height={360}><BarChart data={mix} stackOffset="expand"><XAxis dataKey="n" {...AX} /><YAxis {...AX} width={44} tickFormatter={(v) => Math.round(v * 100) + '%'} />
+            <Tooltip {...TT} formatter={(v) => f2(v)} /><Legend iconSize={10} wrapperStyle={{ fontSize: 11 }} />{COST_N.map((k, i) => <Bar key={k} dataKey={k} stackId="a" fill={PBI[i]} />)}</BarChart></ResponsiveContainer> : empty('No data yet.')}</Tile>
+        <Tile n={5} title="Margin by size" sub={`By size, under ${S.thr} shirts and ${S.thr}+ shirts`}>
+          <ResponsiveContainer width="100%" height={Math.max(300, msz.length * 34)}><BarChart data={msz} layout="vertical" margin={{ right: 40 }}><CartesianGrid horizontal={false} stroke="var(--line)" />
+            <XAxis type="number" {...AX} unit="%" /><YAxis type="category" dataKey="n" {...AX} width={66} interval={0} /><Tooltip {...TT} formatter={(v) => v + '%'} /><Legend iconSize={10} />
+            <Bar dataKey="small" name={`Under ${S.thr}`} fill={PBI[0]} barSize={10}><LabelList dataKey="small" position="right" formatter={(v) => v + '%'} {...LBL} /></Bar>
+            <Bar dataKey="bulk" name={`${S.thr}+`} fill={PBI[2]} barSize={10}><LabelList dataKey="bulk" position="right" formatter={(v) => v + '%'} {...LBL} /></Bar></BarChart></ResponsiveContainer></Tile>
+        <Tile n={3} title="Order pipeline" sub="Orders by stage"><Funnel rows={pipe} /></Tile>
+
+        <Tile n={4} title="Net sales" sub="By customer">
+          {byEnt.length ? <ResponsiveContainer width="100%" height={Math.max(180, byEnt.length * 38)}><BarChart data={byEnt} layout="vertical" margin={{ right: 70 }}><XAxis type="number" hide /><YAxis type="category" dataKey="n" {...AX} width={90} interval={0} />
+            <Tooltip {...TT} formatter={(v) => f2(v)} /><Bar dataKey="v" name="Net sales" fill={PBI[0]} barSize={16}><LabelList dataKey="v" position="right" formatter={(v) => f0(v)} {...LBL} /></Bar></BarChart></ResponsiveContainer> : empty('No orders in this period.')}</Tile>
+        <Tile n={5} title="Cost breakdown" sub="By category in Pula, select a bar for its jobs">
+          <ResponsiveContainer width="100%" height={300}><BarChart data={rows} layout="vertical" margin={{ right: 120 }}><XAxis type="number" hide /><YAxis type="category" dataKey="n" {...AX} width={140} interval={0} />
+            <Tooltip {...TT} formatter={(v) => f2(v)} /><Bar dataKey="v" name="Cost" barSize={18} cursor="pointer" onClick={(_d, i) => setDr(i)}>{rows.map((r, i) => <Cell key={r.n} fill={PBI[i % 7]} />)}
+              <LabelList dataKey="v" position="right" formatter={(v) => `${f2(v)} · ${full ? Math.round((v / full) * 100) : 0}%`} {...LBL} /></Bar></BarChart></ResponsiveContainer>
+          <div className="sub">{dir > 0 ? `Biggest driver: ${COST_N[top]}, ${Math.round((comp[top] / dir) * 100)}% of direct cost.` : 'No orders in this period.'} Full cost per shirt {nShirts ? f2(full / nShirts) : '–'}.</div></Tile>
+        <div className="pb-c3 pb-stack">
+          <Kpi n={3} title="Net profit" sub="After overheads" value={wk ? 'Whole month' : f0(gp - ov)} />
+          <Kpi n={3} title="Full cost per job" sub="Direct cost plus overhead" value={ord.length ? f0(full / ord.length) : '–'} />
         </div>
-        <p className="sub">{dir > 0 ? `Biggest cost driver: ${COST_N[top]}, ${Math.round((comp[top] / dir) * 100)}% of direct cost.` : 'No orders in this period.'} Select a bar to see the jobs behind it.</p>
-        {dr !== null && dr < 6 && (<><h2>{names[dr]}: jobs behind this figure</h2>
-          {jobs.filter((j) => j.v[dr] > 0).length ? (
-            <Table head={['Job card', 'Customer', 'Shirts', 'Amount']} right={2}>
-              {jobs.filter((j) => j.v[dr] > 0).map((j) => <tr key={j.o.jc}><td><Link href={'/orders/' + j.o.jc}>{j.o.jc}</Link></td><td>{j.o.ent}</td><td className="r">{j.sh}</td><td className="r">{f2(j.v[dr])}</td></tr>)}
-            </Table>) : <p className="sub">Nothing recorded here for this period. Record an expense with the job card number as its reference.</p>}</>)}
-        {dr === 6 && <p className="sub">Overhead of {f2(ov)} recorded in this period is shared across {nShirts} shirts.</p>}
+
+        {dr !== null && (
+          <Tile n={12} title={dr < 6 ? COST_N[dr] + ': jobs behind this figure' : 'Allocated overhead'} sub="Drill-down">
+            {dr === 6 ? <p className="sub">Overhead of {f2(ov)} recorded in this period is shared across {nShirts} shirts.</p> : jobs.filter((j) => j.v[dr] > 0).length ? (
+              <Table head={['Job card', 'Customer', 'Shirts', 'Amount']} right={2}>
+                {jobs.filter((j) => j.v[dr] > 0).map((j) => <tr key={j.o.jc}><td><Link href={'/orders/' + j.o.jc}>{j.o.jc}</Link></td><td>{j.o.ent}</td><td className="r">{j.sh}</td><td className="r">{f2(j.v[dr])}</td></tr>)}
+              </Table>) : <p className="sub">Nothing recorded here for this period. Record an expense with the job card number as its reference.</p>}
+          </Tile>)}
+        <Tile n={12} title="Orders" sub="In this period">{ord.length ? <OrdersTable list={ord} /> : empty('No orders in this period.')}</Tile>
       </div>
-      <div className="card"><h2>Margin by size (10+ prices)</h2>
-        {sizes.map((x) => <Bar key={x.n} label={x.n} v={x.mg} max={0.7} lo={x.mg === lo} cols="80px 1fr 150px" right={`${pc(x.mg)} · ${f2(x.c)}`} />)}
-        <div className="sub">Cost per shirt shown after each margin. Lowest margin is highlighted.</div></div>
-      <div className="card"><h2>Orders in this period</h2>{ord.length ? <OrdersTable list={ord} /> : <p className="sub">No orders in this period.</p>}</div>
     </>
   )
 }
 
+const FILTERS = ['All', 'Overdue', 'Awaiting deposit or payment', 'Artwork pending', 'In production', 'Quality hold', 'Ready for collection', 'Completed']
+
 export function Orders() {
-  const { S } = useApp()
+  const { S } = useApp(), [q, setQ] = useState(''), [f, setF] = useState('All')
+  const hit = (o) => [o.jc, o.qt, o.inv, o.ent, o.placed, o.phone].some((v) => (v || '').toLowerCase().includes(q.trim().toLowerCase()))
+  const ok = (o) => { const p = phase(S, o); return f === 'All' || (f === 'Overdue' ? overdue(o) : f === 'Awaiting deposit or payment' ? p.startsWith('Awaiting') : p === f) }
+  const list = [...S.orders].reverse().filter((o) => hit(o) && ok(o))
   return (
     <>
-      <Head title="Orders" />
-      <div className="card">{S.orders.length ? <OrdersTable list={[...S.orders].reverse()} /> : <p>No orders yet. Register the first order to get its job card number.</p>}
-        <p><Link className="btn" href="/new" style={{ display: 'inline-flex', alignItems: 'center', color: '#fff', textDecoration: 'none' }}>New order</Link></p></div>
+      <Head title="Orders" sub="Search by job card, quotation, invoice, customer, company or phone." />
+      <div className="card">
+        <label>Search<input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Job card, customer, phone…" /></label>
+        <div className="chips" style={{ margin: '12px 0' }}>{FILTERS.map((x) => <button key={x} className={'chip' + (f === x ? ' on' : '')} onClick={() => setF(x)}>{x}</button>)}</div>
+        {list.length ? <OrdersTable list={list} /> : <p className="sub">{S.orders.length ? 'No orders match.' : 'No orders yet. Register the first order to get its job card number.'}</p>}
+        <p><Link className="btn" href="/new" style={{ display: 'inline-flex', alignItems: 'center', color: '#fff', textDecoration: 'none' }}>New order</Link></p>
+      </div>
     </>
   )
 }
 
 export function NewOrder() {
   const { S, dispatch } = useApp(), router = useRouter()
-  const [d, setD] = useState({ by: S.user, placed: '', ent: '', dt: '%', dv: 0, dr: '' }), [lines, setLines] = useState([])
+  const [d, setD] = useState({ by: S.user, placed: '', ent: '', phone: '', dueDate: '', dt: '%', dv: 0, dr: '' }), [lines, setLines] = useState([])
   const [ls, setLs] = useState(S.sizes[0].n), [lq, setLq] = useState(1), [err, setErr] = useState('')
   const set = (k) => (e) => setD({ ...d, [k]: e.target.value })
   const c = calc(S, { lines, dt: d.dt, dv: d.dv, pays: [] }), q = c.q
@@ -142,6 +186,8 @@ export function NewOrder() {
             <label>Received by<select value={d.by} onChange={set('by')}><option>Staff 1</option><option>Staff 2</option></select></label>
             <label>Placed by<input value={d.placed} onChange={set('placed')} placeholder="Person's name" /></label>
             <label>Entity or company<input value={d.ent} onChange={set('ent')} placeholder="Company name" /></label>
+            <label>Phone<input type="tel" value={d.phone} onChange={set('phone')} /></label>
+            <label>Due date<input type="date" value={d.dueDate} onChange={set('dueDate')} /></label>
           </div>
           <h2 style={{ marginTop: 18 }}>Add shirts</h2>
           <div className="fm">
@@ -177,19 +223,51 @@ export function NewOrder() {
   )
 }
 
+const ST_TAG = { pending: '', active: 'b', done: 'g', skipped: '' }
+const when = (t) => (t ? new Date(t).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '')
+
+function Production({ o, c }) {
+  const { dispatch } = useApp()
+  const st = o.stages && o.stages.length ? o.stages : mkStages()
+  const reworking = st.some((s) => /^Rework/.test(s.k) && s.st === 'active')
+  const act = (k, op) => dispatch({ type: 'stage', jc: o.jc, k, op })
+  return (
+    <div className="card"><h2>Production stages</h2>
+      {!o.prod ? <div className="note w">Stages unlock once the required payment is recorded and the job is moved to production.</div> : (
+        <Table head={['Stage', 'Status', 'By', 'Started', 'Finished', '']}>
+          {st.map((s) => { const qc = s.k === STAGES[4], fin = s.k === STAGES[6]; return (
+            <tr key={s.k}><td>{s.k}{s.fails ? <span className="sub"> · failed {s.fails}×</span> : null}</td>
+              <td><span className={'tag ' + (ST_TAG[s.st] || '')}>{s.st}{s.result ? ' · ' + s.result : ''}</span></td><td>{s.by || ''}</td><td>{when(s.start)}</td><td>{when(s.end)}</td>
+              <td>{s.st === 'pending' && <><button className="btn o" disabled={qc && reworking} onClick={() => act(s.k, 'start')}>Start</button>{!qc && !fin && <> <button className="btn o" onClick={() => act(s.k, 'skip')}>Skip</button></>}</>}
+                {s.st === 'active' && (qc ? <><button className="btn o" onClick={() => act(s.k, 'pass')}>Pass</button> <button className="btn o" onClick={() => act(s.k, 'fail')}>Fail</button></>
+                  : <button className="btn o" disabled={fin && c.bal > 0.005} onClick={() => act(s.k, 'done')}>Complete</button>)}</td></tr>) })}
+        </Table>)}
+      {o.closed ? <div className="note">Closed {when(o.closed.at)}. Revenue {f2(o.closed.revenue)}, total cost {f2(o.closed.cost)}, actual profit {f2(o.closed.profit)} ({o.closed.revenue ? pc(o.closed.profit / o.closed.revenue) : '–'}).</div>
+        : o.prod && <p><button className="btn" disabled={!st.every(isDone) || c.bal > 0.005} onClick={() => dispatch({ type: 'close', jc: o.jc })}>Close order and calculate profit</button></p>}
+      {o.prod && !o.closed && c.bal > 0.005 && <div className="sub">Final payment must be received before the order can be closed.</div>}
+    </div>
+  )
+}
+
 export function Job() {
-  const { jc } = useParams(), { S, dispatch } = useApp(), [p, setP] = useState({ amt: '', by: '', ent: '', d: TODAY })
+  const { jc } = useParams(), { S, dispatch } = useApp(), [p, setP] = useState({ amt: '', by: '', ent: '', d: TODAY }), [err, setErr] = useState('')
   const o = S.orders.find((x) => x.jc === decodeURIComponent(jc))
   if (!o) return (<><Head title="Job card not found" /><Link href="/orders">Back to orders</Link></>)
-  const c = calc(S, o), [st] = stat(S, o)
-  const pay = () => { dispatch({ type: 'pay', jc: o.jc, amt: +p.amt, by: p.by || o.placed, ent: p.ent || o.ent, d: p.d }); setP({ ...p, amt: '' }) }
+  const c = calc(S, o), pr = progress(o)
+  const pay = () => {
+    if (!(+p.amt > 0)) return setErr('Enter an amount.')
+    if (+p.amt > c.bal + 0.005) return setErr(`The amount is more than the remaining balance of ${f2(c.bal)}.`)
+    setErr(''); dispatch({ type: 'pay', jc: o.jc, amt: +p.amt, by: p.by || o.placed, ent: p.ent || o.ent, d: p.d }); setP({ ...p, amt: '' })
+  }
   return (
     <>
-      <div className="top"><div><h1>Job card {o.jc}</h1><div className="chips" style={{ marginTop: 8 }}><span className="tag b">{o.qt}</span><span className="tag b">{o.inv}</span><span className="tag b">{st}</span></div></div></div>
+      <div className="top"><div><h1>Job card {o.jc}</h1><div className="chips" style={{ marginTop: 8 }}><span className="tag b">{o.qt}</span><span className="tag b">{o.inv}</span><Tag o={o} />{overdue(o) && <span className="tag a">Overdue</span>}</div></div>
+        <button className="btn o" onClick={() => window.print()}>Print job card</button></div>
+      {o.stages && o.stages.length > 0 && <div><div className="mt"><div className="mb" style={{ width: pr + '%' }} /></div><div className="sub">{pr}% of production stages complete</div></div>}
       <div className="grid">
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div className="card"><h2>Order details</h2>
-            <div className="kp">{[['Order date', fd(o.date)], ['Received by', o.by], ['Placed by', o.placed], ['Entity', o.ent]].map(([l, v]) => <div key={l}><div className="sub">{l}</div>{v}</div>)}</div></div>
+            <div className="kp">{[['Order date', fd(o.date)], ['Due date', o.dueDate ? fd(o.dueDate) : '–'], ['Received by', o.by], ['Placed by', o.placed], ['Entity', o.ent], ['Phone', o.phone || '–']].map(([l, v]) => <div key={l}><div className="sub">{l}</div>{v}</div>)}</div></div>
           <div className="card"><h2>Order lines</h2>
             <Table head={['Size', 'Qty', 'Unit price', 'Unit cost', 'Line total']} right={1}>
               {o.lines.map((l) => { const u = unit(S, l, c.q); return <tr key={l.s}><td>{l.s}</td><td className="r">{l.q}</td><td className="r">{f2(u.price)}</td><td className="r">{f2(u.cost)}</td><td className="r">{f2(l.q * u.price)}</td></tr> })}
@@ -199,6 +277,7 @@ export function Job() {
             <div className="tot big"><span>Net total</span><span>{f2(c.net)}</span></div>
             <div className="tot"><span>Production cost</span><span>{f2(c.cs)}</span></div>
             <div className="tot"><span>Gross profit</span><span>{f2(c.gp)}</span></div></div>
+          <Production o={o} c={c} />
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div className="card"><h2>Payments</h2>
@@ -212,6 +291,7 @@ export function Job() {
               <label>Entity<input value={p.ent || o.ent} onChange={(e) => setP({ ...p, ent: e.target.value })} /></label>
               <label>Date<input type="date" value={p.d} onChange={(e) => setP({ ...p, d: e.target.value })} /></label>
             </div>
+            {err && <div className="note w">{err}</div>}
             <p><button className="btn o" onClick={pay}>Record payment</button>{' '}
               <button className="btn" disabled={!c.ok || o.prod} onClick={() => dispatch({ type: 'produce', jc: o.jc })}>{o.prod ? 'In production' : 'Move to production'}</button></p></div>
           <div className="card"><h2>Audit trail</h2>
@@ -236,13 +316,13 @@ export function Payments() {
 }
 
 export function Costing() {
-  const { S, dispatch } = useApp(), [z, setZ] = useState({ n: '', c: 'adult', h: '' })
-  const R = (k, label) => <Num key={k} label={label} value={S.R[k]} onSave={(v) => v !== S.R[k] && dispatch({ type: 'rate', k, v })} />
-  const T = (c, j, label) => <Num key={c + j} label={label} value={S.T[c][j]} onSave={(v) => v !== S.T[c][j] && dispatch({ type: 'tier', c, j, v })} />
-  const G = (k, label) => <Num key={k} label={label} value={S[k]} onSave={(v) => v !== S[k] && dispatch({ type: 'setting', k, v })} />
+  const { S, dispatch, canEdit } = useApp(), [z, setZ] = useState({ n: '', c: 'adult', h: '' })
+  const R = (k, label) => <Num ro={!canEdit} key={k} label={label} value={S.R[k]} onSave={(v) => v !== S.R[k] && dispatch({ type: 'rate', k, v })} />
+  const T = (c, j, label) => <Num ro={!canEdit} key={c + j} label={label} value={S.T[c][j]} onSave={(v) => v !== S.T[c][j] && dispatch({ type: 'tier', c, j, v })} />
+  const G = (k, label) => <Num ro={!canEdit} key={k} label={label} value={S[k]} onSave={(v) => v !== S[k] && dispatch({ type: 'setting', k, v })} />
   return (
     <>
-      <Head title="Costing and prices" sub="Changes recalculate every cost and margin. Orders keep the prices and costs saved when they were registered." />
+      <Head title="Costing and prices" sub={canEdit ? 'Changes recalculate every cost and margin. Orders keep the prices and costs saved when they were registered.' : 'Only an admin can change prices, rates and deposit rules.'} />
       <div className="grid">
         <div className="card"><h2>Cost rates</h2><div className="fm">{R('print', 'Printing, per metre')}{R('fabric', 'Fabric, per metre')}{R('press', 'Pressing, per metre')}{R('sew', 'Sewing, per shirt')}</div></div>
         <div className="card"><h2>Prices and payment rules</h2><div className="fm">
@@ -253,7 +333,7 @@ export function Costing() {
         <Table head={['Size', 'Category', 'Pattern height, mm', 'Metres per shirt', 'Cost per shirt']} right={2}>
           {S.sizes.map((x, i) => (
             <tr key={x.n}><td>{x.n}{x.e ? <span className="sub"> estimate</span> : null}</td><td>{x.c}</td>
-              <td className="r"><input type="number" defaultValue={x.h} key={x.h} aria-label={'Height of ' + x.n} style={{ width: 110, margin: '0 0 0 auto' }}
+              <td className="r"><input type="number" defaultValue={x.h} key={x.h} aria-label={'Height of ' + x.n} disabled={!canEdit} style={{ width: 110, margin: '0 0 0 auto' }}
                 onBlur={(e) => { const v = parseFloat(e.target.value); if (v > 0 && v !== x.h) dispatch({ type: 'height', i, v }) }} /></td>
               <td className="r">{(x.h / 1000).toFixed(3)}</td><td className="r">{f2(cost(S, x))}</td></tr>))}
         </Table>
@@ -262,7 +342,7 @@ export function Costing() {
           <label>Name<input value={z.n} onChange={(e) => setZ({ ...z, n: e.target.value })} /></label>
           <label>Category<select value={z.c} onChange={(e) => setZ({ ...z, c: e.target.value })}><option>adult</option><option>kids</option></select></label>
           <label>Pattern height, mm<input type="number" value={z.h} onChange={(e) => setZ({ ...z, h: e.target.value })} /></label>
-          <button className="btn" onClick={() => { if (z.n.trim() && +z.h > 0) { dispatch({ type: 'addSize', size: { n: z.n.trim(), c: z.c, h: +z.h } }); setZ({ n: '', c: 'adult', h: '' }) } }}>Add size</button>
+          <button className="btn" disabled={!canEdit} onClick={() => { if (z.n.trim() && +z.h > 0) { dispatch({ type: 'addSize', size: { n: z.n.trim(), c: z.c, h: +z.h } }); setZ({ n: '', c: 'adult', h: '' }) } }}>Add size</button>
         </div>
       </div>
     </>
@@ -329,6 +409,42 @@ export function Assistant() {
         {err && <div className="note w">{err}</div>}
         {ans && <div className="note" style={{ whiteSpace: 'pre-wrap' }}>{ans}</div>}
         <details><summary>Data sent to the assistant</summary><pre style={{ overflow: 'auto', fontSize: 12 }}>{JSON.stringify(snapshot(S), null, 1)}</pre></details></div>
+    </>
+  )
+}
+
+const csv = (rows) => rows.map((r) => r.map((v) => '"' + String(v ?? '').replace(/"/g, '""') + '"').join(',')).join('\n')
+const save = (name, text, type = 'text/csv') => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name; a.click(); URL.revokeObjectURL(a.href) }
+
+export function Data() {
+  const { S, dispatch } = useApp(), [msg, setMsg] = useState('')
+  const stamp = TODAY
+  const orders = () => save(`orders-${stamp}.csv`, csv([['Job card', 'Quotation', 'Invoice', 'Date', 'Due', 'Received by', 'Placed by', 'Entity', 'Phone', 'Shirts', 'Net total', 'Production cost', 'Paid', 'Balance', 'Status'],
+    ...S.orders.map((o) => { const c = calc(S, o); return [o.jc, o.qt, o.inv, o.date, o.dueDate, o.by, o.placed, o.ent, o.phone, c.q, c.net.toFixed(2), c.cs.toFixed(2), c.paid.toFixed(2), c.bal.toFixed(2), phase(S, o)] })]))
+  const pays = () => save(`payments-${stamp}.csv`, csv([['Job card', 'Date', 'Paid by', 'Entity', 'Amount'], ...S.orders.flatMap((o) => o.pays.map((p) => [o.jc, p.d, p.by, p.ent, p.amt.toFixed(2)]))]))
+  const audit = () => save(`audit-${stamp}.csv`, csv([['When', 'Who', 'Job card', 'What happened'], ...S.audit.map((a) => [a.ts, a.u, a.o, a.t])]))
+  const restore = (e) => {
+    const f = e.target.files[0]; if (!f) return
+    f.text().then((t) => {
+      try {
+        const j = JSON.parse(t)
+        if (!Array.isArray(j.orders) || !j.R || !Array.isArray(j.sizes)) throw new Error('This is not an Anlix tracker backup.')
+        if (!confirm('Replace all current data with this backup?')) return
+        dispatch({ type: 'load', state: j }); setMsg('Backup restored.')
+      } catch (x) { setMsg('Could not restore: ' + x.message) }
+    })
+    e.target.value = ''
+  }
+  return (
+    <>
+      <Head title="Data and backups" sub="Download your records, or restore from a backup file." />
+      <div className="card"><h2>Backup</h2>
+        <p className="sub">The backup holds everything: orders, payments, prices, overheads and the audit log. Keep a copy somewhere safe, and test a restore now and then.</p>
+        <p><button className="btn" onClick={() => save(`anlix-backup-${stamp}.json`, JSON.stringify(S, null, 1), 'application/json')}>Download backup</button></p>
+        <label>Restore from backup<input type="file" accept="application/json,.json" onChange={restore} /></label>
+        {msg && <div className="note">{msg}</div>}</div>
+      <div className="card"><h2>Export to Excel (CSV)</h2>
+        <div className="chips"><button className="btn o" onClick={orders}>Orders</button><button className="btn o" onClick={pays}>Payments</button><button className="btn o" onClick={audit}>Audit log</button></div></div>
     </>
   )
 }
