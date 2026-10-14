@@ -11,6 +11,7 @@ export function Provider({ children }) {
   const [S, dispatch] = useReducer(reduce, null, initial)
   const [ready, setReady] = useState(false)
   const [session, setSession] = useState(null)
+  const [role, setRole] = useState(supabase ? null : 'admin')
   const [sync, setSync] = useState(supabase ? 'Signed out' : 'Local only')
   const pulled = useRef(false)
   const timer = useRef()
@@ -29,6 +30,7 @@ export function Provider({ children }) {
 
   useEffect(() => {
     if (!supabase || !session) { pulled.current = false; return }
+    supabase.from('staff_members').select('role').eq('user_id', session.user.id).maybeSingle().then(({ data }) => setRole(data?.role || 'viewer'))
     supabase.from('anlix_app_state').select('state').eq('id', 1).maybeSingle().then(({ data, error }) => {
       if (data?.state) dispatch({ type: 'load', state: data.state })
       pulled.current = !error
@@ -49,5 +51,5 @@ export function Provider({ children }) {
     }, 1500)
   }, [S])
 
-  return <Ctx.Provider value={{ S, dispatch, ready, session, sync, cloud: !!supabase }}>{children}</Ctx.Provider>
+  return <Ctx.Provider value={{ S, dispatch, ready, session, sync, role, canEdit: role === 'admin', cloud: !!supabase }}>{children}</Ctx.Provider>
 }
