@@ -6,7 +6,7 @@ import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, Cart
 import { useApp } from './Store'
 import { supabase } from '@/lib/supabase'
 import { isCompleted } from './Invoice'
-import { TODAY, f2, f0, pc, fd, sum, sz, cost, price, qty, calc, unit, alerts, snapshot, costParts, jobNo, materialPlan, COST_N, STAGES, mkStages, isDone, progress, overdue, phase, phaseTag } from '@/lib/model'
+import { TODAY, f2, f0, pc, fd, sum, sz, cost, price, qty, calc, unit, alerts, snapshot, costParts, jobNo, materialPlan, tolPct, COST_N, STAGES, mkStages, isDone, progress, overdue, phase, phaseTag } from '@/lib/model'
 
 const Head = ({ title, sub }) => {
   const { S, dispatch } = useApp()
@@ -187,26 +187,30 @@ export function Orders() {
   )
 }
 
-const MaterialPlan = ({ lines, title = 'Materials and production cost' }) => {
+const MaterialPlan = ({ lines, title = 'Materials and production cost', allow, jc }) => {
   const { S } = useApp()
-  const m = materialPlan(S, lines)
+  const m = materialPlan(S, lines, allow)
   return (
     <div className="card"><h2>{title}</h2>
       {m.shirts ? (
         <>
-          <Table head={['Colour', 'Fabric', 'Sizes', 'Shirts', 'Fabric (m)', 'Fabric cost', 'Production cost']} right={3}>
+          <Table head={['Colour', 'Fabric', 'Sizes', 'Shirts', 'Pattern (m)', 'With tolerance (m)', 'Fabric cost', 'Production cost']} right={3}>
             {m.rows.map((g) => (
               <tr key={g.colour + '|' + g.fabric}><td>{g.colour}</td><td>{g.fabric || '–'}</td><td>{g.sizeText}</td><td className="r">{g.shirts}</td>
-                <td className="r">{g.metres.toFixed(2)}</td><td className="r">{f2(g.fabricCost)}</td><td className="r">{f2(g.cost)}</td></tr>
+                <td className="r">{g.base.toFixed(2)}</td><td className="r">{g.metres.toFixed(2)}</td><td className="r">{f2(g.fabricCost)}</td><td className="r">{f2(g.cost)}</td></tr>
             ))}
           </Table>
+          <div className="tot"><span>Pattern metres (theoretical)</span><span>{m.base.toFixed(2)} m</span></div>
+          <div className="tot"><span>{m.tol > 0 ? `Metre tolerance, ${m.tol}%` : 'Metre tolerance'}</span><span>{m.tol > 0 ? `+${(m.metres - m.base).toFixed(2)} m` : 'None applied'}</span></div>
+          <div className="tot big"><span>Fabric to allow for</span><span>{m.metres.toFixed(2)} m</span></div>
           <div className="tot"><span>Fabric, {m.metres.toFixed(2)} m at {f2(S.R.fabric)} per m</span><span>{f2(m.parts.fabric)}</span></div>
           <div className="tot"><span>Printing, at {f2(S.R.print)} per m</span><span>{f2(m.parts.print)}</span></div>
           <div className="tot"><span>Pressing, at {f2(S.R.press)} per m</span><span>{f2(m.parts.press)}</span></div>
           <div className="tot"><span>Sewing, {m.shirts} shirts at {f2(S.R.sew)}</span><span>{f2(m.parts.sew)}</span></div>
           <div className="tot big"><span>Production cost</span><span>{f2(m.total)}</span></div>
           <div className="tot"><span>Average per shirt</span><span>{f2(m.avg)}</span></div>
-          <p className="sub">Fabric length is pattern height × quantity, at the rates in Costing and prices. No allowance is made for cutting waste or rework.</p>
+          <p className="sub">Pattern metres are pattern height × quantity. {m.tol > 0 ? `The ${m.tol}% metre tolerance is added for layout waste and is included in the cost above. ` : 'No metre tolerance was costed into this job. '}Change the tolerance in Costing and prices. Rework is costed separately.</p>
+          {jc && <p className="sub">Once the job is cut, enter the metres actually used on the <Link href="/variance">Metre variance</Link> page.</p>}
         </>
       ) : <p className="sub">Add items with a valid size and quantity to see the fabric needed and the cost of production.</p>}
     </div>
@@ -225,7 +229,7 @@ export function NewOrder() {
   const set = (k) => (e) => setD({ ...d, [k]: e.target.value })
   const setF1 = (k) => (e) => setF({ ...f, [k]: e.target.value })
   const good = lines.filter((l) => sz(S, l.s) && l.q > 0), bad = lines.length - good.length
-  const c = calc(S, { lines: good, dt: d.dt, dv: d.dv, pays: [] }), q = c.q
+  const c = calc(S, { lines: good, dt: d.dt, dv: d.dv, pays: [] }), q = c.q, mp = materialPlan(S, good)
   const staffOk = d.by.trim().length >= 2
   const known = [...new Set(S.orders.map((o) => o.by).filter(Boolean))]
   const colours = [...new Set(lines.map((l) => l.colour).filter(Boolean))]
@@ -362,7 +366,8 @@ export function NewOrder() {
             <div className="tot"><span>Discount</span><span>−{f2(c.d)}</span></div>
             <div className="tot big"><span>Net total</span><span>{f2(c.net)}</span></div>
             <div className="tot"><span>Payment required before production</span><span>{f2(c.req)}</span></div>
-            <div className="tot"><span>Production cost</span><span>{f2(c.cs)}</span></div>
+            {mp.shirts > 0 && <div className="tot"><span>Fabric to cut ({mp.base.toFixed(2)} m pattern{tolPct(S) > 0 ? ` + ${tolPct(S)}% tolerance` : ''})</span><span>{mp.metres.toFixed(2)} m</span></div>}
+            <div className="tot"><span>Production cost{tolPct(S) > 0 ? `, incl. ${tolPct(S)}% metre tolerance` : ''}</span><span>{f2(c.cs)}</span></div>
             {c.net > 0 && <div className="tot"><span>Expected margin</span><span>{pc(c.gp / c.net)}</span></div>}
             {c.net > 0 && c.net < c.cs && <div className="note w">The net total is below production cost.</div>}
             {err && <div className="note w" role="alert">{err}</div>}
@@ -425,7 +430,7 @@ export function Job() {
             <div className="tot big"><span>Net total</span><span>{f2(c.net)}</span></div>
             <div className="tot"><span>Production cost</span><span>{f2(c.cs)}</span></div>
             <div className="tot"><span>Gross profit</span><span>{f2(c.gp)}</span></div></div>
-          <MaterialPlan lines={o.lines} title="Materials required" />
+          <MaterialPlan lines={o.lines} title="Materials required" allow={+o.allow || 0} jc={o.jc} />
           <Production o={o} c={c} />
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -473,18 +478,18 @@ export function Costing() {
     <>
       <Head title="Costing and prices" sub={canEdit ? 'Changes recalculate every cost and margin. Orders keep the prices and costs saved when they were registered.' : 'Only an admin can change prices, rates and deposit rules.'} />
       <div className="grid">
-        <div className="card"><h2>Cost rates</h2><div className="fm">{R('print', 'Printing, per metre')}{R('fabric', 'Fabric, per metre')}{R('press', 'Pressing, per metre')}{R('sew', 'Sewing, per shirt')}</div></div>
+        <div className="card"><h2>Cost rates</h2><div className="fm">{R('print', 'Printing, per metre')}{R('fabric', 'Fabric, per metre')}{R('press', 'Pressing, per metre')}{R('sew', 'Sewing, per shirt')}{G('tol', 'Metre tolerance, ±% (costed into new orders)')}</div></div>
         <div className="card"><h2>Prices and payment rules</h2><div className="fm">
           {T('adult', 0, `Adult, under ${S.thr}`)}{T('adult', 1, `Adult, ${S.thr}+`)}{T('kids', 0, `Kids, under ${S.thr}`)}{T('kids', 1, `Kids, ${S.thr}+`)}
           {G('thr', 'Bulk threshold, shirts')}{G('dep', 'Deposit for bulk orders, %')}</div></div>
       </div>
       <div className="card"><h2>Sizes</h2>
-        <Table head={['Size', 'Category', 'Pattern height, mm', 'Metres per shirt', 'Cost per shirt']} right={2}>
+        <Table head={['Size', 'Category', 'Pattern height, mm', 'Metres per shirt', 'Metres with tolerance', 'Cost per shirt']} right={2}>
           {S.sizes.map((x, i) => (
             <tr key={x.n}><td>{x.n}{x.e ? <span className="sub"> estimate</span> : null}</td><td>{x.c}</td>
               <td className="r"><input type="number" defaultValue={x.h} key={x.h} aria-label={'Height of ' + x.n} disabled={!canEdit} style={{ width: 110, margin: '0 0 0 auto' }}
                 onBlur={(e) => { const v = parseFloat(e.target.value); if (v > 0 && v !== x.h) dispatch({ type: 'height', i, v }) }} /></td>
-              <td className="r">{(x.h / 1000).toFixed(3)}</td><td className="r">{f2(cost(S, x))}</td></tr>))}
+              <td className="r">{(x.h / 1000).toFixed(3)}</td><td className="r">{((x.h / 1000) * (1 + tolPct(S) / 100)).toFixed(3)}</td><td className="r">{f2(cost(S, x))}</td></tr>))}
         </Table>
         <h2 style={{ marginTop: 18 }}>Add a size</h2>
         <div className="fm">
