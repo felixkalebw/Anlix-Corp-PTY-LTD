@@ -1,0 +1,21 @@
+#ax-gate{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;overflow:auto;background:linear-gradient(135deg,#0b2545,#13518a)}
+.ax-loading{min-height:100vh;display:grid;place-items:center;font-family:system-ui,sans-serif}
+.ax-card{width:100%;max-width:420px;background:#fff;color:#14213d;border-radius:16px;padding:32px;box-shadow:0 24px 60px rgba(0,0,0,.35);font-family:system-ui,sans-serif}
+.ax-card h1{font-size:22px;margin:0 0 6px}.ax-card p{color:#5b6b82;font-size:14px;margin:0 0 20px}
+.ax-brand{font-weight:700;margin-bottom:18px;color:#0e9aa7}
+.ax-f{display:block;font-size:13px;font-weight:600;margin-bottom:14px}
+.ax-f input,.ax-sel{display:block;width:100%;margin-top:5px;padding:11px 12px;border:1px solid #d5dce6;border-radius:9px;font-size:15px;background:#f7f9fc;color:#14213d}
+.ax-btn{padding:10px 16px;border:0;border-radius:9px;background:#0e9aa7;color:#fff;font-weight:700;font-size:14px;cursor:pointer}
+.ax-btn.full{width:100%;padding:13px;font-size:15px}.ax-btn.alt{background:#e8edf3;color:#14213d}.ax-btn.bad{background:#c0392b}.ax-btn:disabled{opacity:.6}
+.ax-link{background:none;border:0;color:#0e9aa7;font-weight:600;cursor:pointer;font-size:13px;padding:0}
+.ax-row{display:flex;justify-content:space-between;margin-top:14px;gap:8px;flex-wrap:wrap}
+.ax-msg{margin-top:12px;font-size:13px;color:#0b7e89}.ax-msg.err{color:#c0392b}
+#ax-bar{position:fixed;right:12px;bottom:12px;z-index:900;display:flex;gap:8px;align-items:center;background:#0b2545;color:#fff;padding:8px 12px;border-radius:999px;font:13px system-ui,sans-serif}
+#ax-bar a,#ax-bar button{background:#ffffff22;color:#fff;border:0;border-radius:999px;padding:5px 10px;cursor:pointer;text-decoration:none;font:inherit}
+.ax-page{max-width:900px;margin:0 auto;padding:24px;font-family:system-ui,sans-serif}
+.ax-tabs{display:flex;gap:8px;margin:12px 0}
+.ax-item{border:1px solid #d5dce6;border-radius:10px;padding:12px;margin-bottom:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.ax-item .grow{flex:1;min-width:180px}.ax-item small{color:#5b6b82;display:block}
+.ax-badge{font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px;background:#e8edf3}
+.ax-badge.pending{background:#ffe9b3}.ax-badge.approved{background:#c9f0d5}.ax-badge.rejected,.ax-badge.suspended{background:#f7c9c4}
+.ax-perms{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:6px;width:100%;font-size:13px}
