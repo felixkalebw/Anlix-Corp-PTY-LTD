@@ -67,6 +67,11 @@ export const phaseTag = (p) => (p === 'Completed' || p === 'Ready for collection
 export const FAULTS = ['Missing shirt', 'Print defect', 'Stitching defect', 'Wrong size', 'Damaged', 'Other']
 export const REMAKE_FAULTS = ['Missing shirt', 'Wrong size', 'Damaged']
 export const RESP_TYPES = ['Staff member', 'Supplier', 'Equipment or machine', 'Customer change', 'Process or instruction', 'Other']
+// A rework runs through the normal production stages in the normal order, from printing up to the stage where the defect was found.
+// If the defect was found at inspection, the rework stops before inspection (the order's own inspection stage is repeated afterwards).
+export const rwAvail = (foundIdx, fail) => (foundIdx < 0 ? [] : STAGES.slice(Math.min(2, foundIdx), Math.min(fail ? 4 : foundIdx + 1, 6)))
+export const rwDefault = (fault, avail) => { const d = avail.filter((k) => fault !== 'Stitching defect' || STAGES.indexOf(k) >= 3); return d.length ? d : avail }
+export const rwPlan = (keys) => STAGES.filter((k) => (keys || []).includes(k)).map((k) => ({ k, st: 'pending' }))
 export const reworksOf = (o) => (o.stages || []).filter((s) => s.rw)
 export const reworkCost = (o) => reworksOf(o).reduce((t, s) => t + (+(s.rw.act ?? s.rw.est) || 0), 0)
 export const stageBlocked = (o, i) => (o.stages || []).slice(0, i).some((s) => !isDone(s))
@@ -183,12 +188,16 @@ export function reduce(S, a) {
       const fault = FAULTS.includes(a.fault) ? a.fault : 'Other'
       const n = st.filter((x) => x.rw).length + 1, id = `RW-${o.jc.slice(3)}-${n}`
       if (a.fail) { src.st = 'pending'; src.result = 'Fail'; src.fails = (src.fails || 0) + 1; src.by = S.user }
-      const rw = { id, from: src.k, what, happened, who, whoType: a.whoType, fault, remake: !!a.remake, items, qty: items.length ? sum(items, (x) => x.q) : Math.max(0, parseInt(a.qty) || 0), mat, lab, oth, est, raisedBy: S.user, raisedAt: t, found: a.fail ? 'Quality inspection' : src.k }
+      const foundIdx = STAGES.indexOf(src.k), avail = rwAvail(foundIdx, !!a.fail)
+      const chosen = (Array.isArray(a.steps) ? a.steps : []).filter((k) => avail.includes(k))
+      const plan = rwPlan(chosen.length ? chosen : rwDefault(fault, avail))
+      if (plan.length) { plan[0].st = 'active'; plan[0].start = t; plan[0].by = S.user }
+      const rw = { id, from: src.k, what, happened, who, whoType: a.whoType, fault, remake: !!a.remake, items, qty: items.length ? sum(items, (x) => x.q) : Math.max(0, parseInt(a.qty) || 0), mat, lab, oth, est, raisedBy: S.user, raisedAt: t, found: a.fail ? 'Quality inspection' : src.k, steps: plan.length ? plan : undefined }
       // a failed inspection sends the job back before the inspection point; other rework sits straight after the stage it came from
       st.splice(a.fail ? i : i + 1, 0, { k: `Rework ${n}: ${src.k}`, st: 'active', start: t, by: S.user, rw })
       const fin = { id, date: TODAY, category: 'Wastage and rework', desc: `${src.k}: ${what} (responsible: ${who}, ${a.whoType})`, amount: est, ref: o.jc, by: S.user }
       const next = st.find((x) => !isDone(x))
-      return { ...add(log(`Rework ${id} raised at "${src.k}": ${what}. What happened: ${happened}. Responsible: ${who} (${a.whoType}). Estimated cost ${f2(est)}${a.fail ? '. Inspection failed' : ''}`, a.jc)),
+      return { ...add(log(`Rework ${id} raised at "${src.k}": ${what}. What happened: ${happened}. Responsible: ${who} (${a.whoType}). Estimated cost ${f2(est)}${a.fail ? '. Inspection failed' : ''}${plan.length ? '. Rework stages: ' + plan.map((x) => x.k).join(', ') : ''}`, a.jc)),
         finance: [...(S.finance || []), fin], orders: S.orders.map((x) => (x.jc === a.jc ? { ...x, stages: st, prodStatus: next ? next.k : 'Packed' } : x)) }
     }
     case 'reopen': {
@@ -210,6 +219,7 @@ export function reduce(S, a) {
       const t = new Date().toISOString(), st = (o.stages || []).map((s) => ({ ...s }))
       const s = st.find((x) => x.k === a.k)
       if (!s || !s.rw || s.st !== 'active') return S
+      if (s.rw.steps && s.rw.steps.length) return S // a rework tracked by stage is completed by approving its last stage
       const act = +a.actual, who = (a.approver || S.user || '').trim() || S.user, note = (a.note || '').trim()
       if (!Number.isFinite(act) || act < 0) return S
       s.rw = { ...s.rw, act: +act.toFixed(2), doneAt: t, fix: note }
@@ -218,6 +228,54 @@ export function reduce(S, a) {
       const finance = (S.finance || []).map((x) => (x.id === s.rw.id && x.ref === o.jc ? { ...x, amount: +act.toFixed(2) } : x))
       return { ...add(log(`Rework ${s.rw.id} completed and approved by ${who}. Actual cost ${f2(act)}${diff ? ` (estimate was ${f2(s.rw.est)})` : ''}${note ? '. ' + note : ''}`, a.jc)),
         finance, orders: S.orders.map((x) => (x.jc === a.jc ? { ...x, stages: st, prodStatus: next ? next.k : 'Packed' } : x)) }
+    }
+    case 'rwPlan': {
+      // attach stages to a rework that was raised before stage tracking existed
+      const o = S.orders.find((x) => x.jc === a.jc)
+      if (!o || !o.prod || o.closed) return S
+      const t = new Date().toISOString(), st = (o.stages || []).map((s) => ({ ...s }))
+      const s = st.find((x) => x.k === a.k)
+      if (!s || !s.rw || s.st !== 'active' || (s.rw.steps && s.rw.steps.length)) return S
+      const plan = rwPlan(rwDefault(s.rw.fault, rwAvail(STAGES.indexOf(s.rw.from), s.rw.found === 'Quality inspection')))
+      if (!plan.length) return S
+      plan[0].st = 'active'; plan[0].start = t; plan[0].by = S.user
+      s.rw = { ...s.rw, steps: plan }
+      return { ...add(log(`Rework ${s.rw.id} now tracked by stage: ${plan.map((x) => x.k).join(', ')}`, a.jc)), orders: S.orders.map((x) => (x.jc === a.jc ? { ...x, stages: st } : x)) }
+    }
+    case 'rwStep': {
+      const o = S.orders.find((x) => x.jc === a.jc)
+      if (!o || !o.prod || o.closed) return S
+      const t = new Date().toISOString(), st = (o.stages || []).map((s) => ({ ...s }))
+      const s = st.find((x) => x.k === a.k)
+      if (!s || !s.rw || s.st !== 'active' || !s.rw.steps || !s.rw.steps.length) return S
+      const steps = s.rw.steps.map((x) => ({ ...x })), i = steps.findIndex((x) => x.k === a.step), p = steps[i]
+      if (!p) return S
+      const who = (a.approver || S.user || '').trim() || S.user, note = (a.note || '').trim(), id = s.rw.id
+      const put = (e) => ({ ...add(e), orders: S.orders.map((x) => (x.jc === a.jc ? { ...x, stages: st, prodStatus: (st.find((y) => !isDone(y)) || { k: 'Packed' }).k } : x)) })
+      if (a.sub === 'start') {
+        if (p.st !== 'pending' || steps.slice(0, i).some((x) => x.st !== 'done')) return S
+        p.st = 'active'; p.start = t; p.by = S.user
+        s.rw = { ...s.rw, steps }
+        return put(log(`Rework ${id}: stage \"${p.k}\" started`, a.jc))
+      }
+      if (a.sub !== 'done' || p.st !== 'active') return S
+      const hasCost = a.cost !== '' && a.cost !== null && a.cost !== undefined, cost = hasCost ? +a.cost : 0
+      if (hasCost && !(Number.isFinite(cost) && cost >= 0)) return S
+      p.st = 'done'; p.end = t; p.by = S.user; p.start = p.start || t; p.appr = { by: who, at: t, note }
+      if (hasCost) p.cost = +cost.toFixed(2)
+      const last = steps.every((x) => x.st === 'done')
+      if (!last) {
+        s.rw = { ...s.rw, steps }
+        return put(log(`Rework ${id}: stage \"${p.k}\" approved by ${who}${hasCost ? `, cost ${f2(cost)}` : ''}${note ? ': ' + note : ''} (${steps.filter((x) => x.st === 'done').length} of ${steps.length})`, a.jc))
+      }
+      const act = +a.actual
+      if (!Number.isFinite(act) || act < 0) { return S }
+      const fix = steps.filter((x) => x.appr && x.appr.note).map((x) => `${x.k}: ${x.appr.note}`).join('; ')
+      s.rw = { ...s.rw, steps, act: +act.toFixed(2), doneAt: t, fix }
+      s.st = 'done'; s.end = t; s.by = S.user; s.appr = { by: who, at: t, note: `All ${steps.length} rework stages approved` }
+      const diff = act - s.rw.est
+      const finance = (S.finance || []).map((x) => (x.id === id && x.ref === o.jc ? { ...x, amount: +act.toFixed(2) } : x))
+      return { ...put(log(`Rework ${id} completed: all ${steps.length} stages approved, final stage by ${who}. Actual cost ${f2(act)}${diff ? ` (estimate was ${f2(s.rw.est)})` : ''}`, a.jc)), finance }
     }
     case 'close': {
       const o = S.orders.find((x) => x.jc === a.jc)
