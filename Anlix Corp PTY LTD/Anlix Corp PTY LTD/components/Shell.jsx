@@ -1,47 +1,56 @@
 'use client'
-import { useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useApp } from './Store'
-import { supabase } from '@/lib/supabase'
+import { useAuth } from './AuthProvider'
 
-const NAV = [['/', 'Dashboard'], ['/orders', 'Orders'], ['/new', 'New order'], ['/payments', 'Payments'], ['/costing', 'Costing and prices'], ['/overheads', 'Overheads'], ['/audit', 'Audit log'], ['/ai', 'AI assistant']]
-
-function SignIn() {
-  const [email, setEmail] = useState(''), [pass, setPass] = useState(''), [err, setErr] = useState('')
-  const go = async (e) => {
-    e.preventDefault()
-    const { error } = await supabase.auth.signInWithPassword({ email, password: pass })
-    if (error) setErr(error.message)
-  }
-  return (
-    <main className="main" style={{ maxWidth: 420, margin: '0 auto' }}>
-      <h1>Anlix Corp tracker</h1>
-      <form className="card" onSubmit={go}>
-        <label>Email<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required /></label>
-        <label style={{ marginTop: 10 }}>Password<input type="password" value={pass} onChange={(e) => setPass(e.target.value)} required /></label>
-        {err && <div className="note w">{err}</div>}
-        <p><button className="btn" type="submit">Sign in</button></p>
-      </form>
-    </main>
-  )
-}
+// [address, label, permission needed to see it]
+const NAV = [
+  ['/', 'Dashboard', 'reports.view'],
+  ['/orders', 'Orders', 'orders.view'],
+  ['/new', 'New order', 'orders.edit'],
+  ['/payments', 'Payments', 'payments.view'],
+  ['/documents', 'Quotations & invoices', 'documents.view'],
+  ['/costing', 'Costing and prices', 'reports.view'],
+  ['/overheads', 'Overheads', 'finance.view'],
+  ['/audit', 'Audit log', 'audit.view'],
+  ['/ai', 'AI assistant', 'ai.use'],
+]
 
 export default function Shell({ children }) {
-  const { cloud, session, sync, ready } = useApp()
+  const { sync, ready } = useApp()
+  const { user, access, can, signOut } = useAuth() // sign-in itself is handled by AuthProvider
   const path = usePathname()
-  if (cloud && !session) return <SignIn />
+  const isOn = (h) => (h === '/' ? path === '/' : path === h || path.startsWith(h + '/'))
+  const need = (NAV.find(([h]) => isOn(h)) || [])[2]
+  const blocked = need && !can(need)
+
   return (
     <div className="app">
       <nav className="side" aria-label="Main">
         <div className="brand">Anlix Corp</div>
-        {NAV.map(([h, t]) => (
-          <Link key={h} href={h} className={'nv' + (path === h || (h === '/orders' && path.startsWith('/orders/')) ? ' on' : '')}>{t}</Link>
+        {NAV.filter(([, , perm]) => can(perm)).map(([h, t]) => (
+          <Link key={h} href={h} className={'nv' + (isOn(h) ? ' on' : '')}>{t}</Link>
         ))}
-        <div className="sub" style={{ padding: '12px', color: 'var(--sink)' }}>{sync}</div>
-        {cloud && session && <button className="nv" onClick={() => supabase.auth.signOut()}>Sign out</button>}
+        {can('staff.manage') && user && (
+          <Link href="/admin/staff" className={'nv' + (path.startsWith('/admin') ? ' on' : '')}>Staff access</Link>
+        )}
+        <div className="sub" style={{ padding: '12px', color: 'var(--sink)' }}>
+          {sync}
+          {user && <div style={{ marginTop: 6 }}>{access?.full_name || user.email} · {access?.role}</div>}
+        </div>
+        {user && <button className="nv" onClick={signOut}>Sign out</button>}
       </nav>
-      <main className="main">{ready && children}</main>
+      <main className="main">
+        {blocked ? (
+          <div className="card">
+            <h1>No access</h1>
+            <p>Your role doesn't include this page. Choose another one from the menu.</p>
+          </div>
+        ) : (
+          ready && children
+        )}
+      </main>
     </div>
   )
 }
