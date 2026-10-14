@@ -407,6 +407,7 @@ export function Job() {
     <>
       <div className="top"><div><h1>Job card {o.jc}</h1><div className="chips" style={{ marginTop: 8 }}><span className="tag b">{o.qt}</span><span className="tag b">{o.inv}</span><Tag o={o} />{overdue(o) && <span className="tag a">Overdue</span>}</div></div>
         <div style={{ display: 'flex', gap: 8 }}>
+          <Link className="btn o" href={`/orders/${o.jc}/quotation`}>View quotation</Link>
           {isCompleted(S, o) && <Link className="btn" href={`/orders/${o.jc}/invoice`}>View invoice</Link>}
           <button className="btn o" onClick={() => window.print()}>Print job card</button>
         </div></div>
@@ -599,4 +600,4 @@ export function Data() {
   )
 }
 
-export { Invoice } from './Invoice'
+export { Invoice, Quotation } from './Invoice'
