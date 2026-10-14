@@ -1,5 +1,7 @@
 // app/api/documents/extract/route.js
-// Reads an uploaded quotation or invoice (PDF or photo) with Gemini and returns structured data.
+// Reads an uploaded quotation or invoice (PDF or photo) with OpenAI GPT-6 Luna and returns structured data.
+// Needs OPENAI_API_KEY in the environment of the server (Render > Environment). Never prefix it with NEXT_PUBLIC_.
+// Optional: AI_MODEL (defaults to gpt-6-luna).
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
@@ -7,17 +9,9 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-const MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
-const BASE = "https://generativelanguage.googleapis.com/v1beta";
+const MODEL = process.env.AI_MODEL || "gpt-6-luna";
 const MAX_RETRIES = 3;
 const MAX_FILES = 10;
-const KEYS = [
-  process.env.GEMINI_API_KEY, process.env.GEMINI_API_KEY_2, process.env.GEMINI_API_KEY_3,
-  process.env.GEMINI_API_KEY_4, process.env.GEMINI_API_KEY_5,
-].filter(Boolean);
-const PER_KEY_MS = 12000; // free tier: ~10 requests/minute per key
-const cooldowns = new Map(KEYS.map((k) => [k, 0]));
-let ki = 0;
 
 const SYSTEM = `You read quotations and invoices for Anlix Corp, a T-shirt and clothing printing business in Botswana, and return structured JSON.
 Amounts are in Botswana pula (written P or BWP). Return ONLY a JSON object with exactly these keys:
@@ -75,52 +69,44 @@ function parseJson(text) {
   return null;
 }
 
-async function nextKey() {
-  const now = Date.now();
-  for (let i = 0; i < KEYS.length; i++) {
-    const k = KEYS[(ki + i) % KEYS.length];
-    if ((cooldowns.get(k) || 0) <= now) { ki = (ki + i + 1) % KEYS.length; cooldowns.set(k, now + PER_KEY_MS); return k; }
-  }
-  await sleep(Math.min(...cooldowns.values()) - now + 200);
-  const k = KEYS[ki % KEYS.length];
-  ki = (ki + 1) % KEYS.length;
-  cooldowns.set(k, Date.now() + PER_KEY_MS);
-  return k;
-}
-
-async function callGemini(base64, mime) {
-  const wait = Math.max(500, Math.ceil(PER_KEY_MS / KEYS.length));
+async function callLuna(base64, mime, fileName) {
+  const isPdf = mime === "application/pdf";
+  const file = isPdf
+    ? { type: "input_file", filename: fileName.endsWith(".pdf") ? fileName : fileName + ".pdf", file_data: `data:application/pdf;base64,${base64}` }
+    : { type: "input_image", image_url: `data:${mime};base64,${base64}` };
+  let lastError = "The AI service is busy. Wait a minute and try again.";
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    const key = await nextKey();
     try {
-      const res = await timed(`${BASE}/models/${MODEL}:generateContent?key=${key}`, {
+      const res = await timed("https://api.openai.com/v1/responses", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
         body: JSON.stringify({
-          system_instruction: { parts: [{ text: SYSTEM }] },
-          contents: [{ role: "user", parts: [
-            { text: "Extract this document. Return ONLY the JSON object." },
-            { inline_data: { mime_type: mime, data: base64 } },
-          ] }],
-          generationConfig: { temperature: 0.1, maxOutputTokens: 16384, responseMimeType: "application/json", thinkingConfig: { thinkingBudget: 1024 } },
+          model: MODEL,
+          instructions: SYSTEM,
+          input: [{ role: "user", content: [{ type: "input_text", text: "Extract this document. Return ONLY the JSON object." }, file] }],
+          text: { format: { type: "json_object" } },
+          reasoning: { effort: "low" },
+          max_output_tokens: 8000,
         }),
       }, 120000);
-      if (res.status === 429 || res.status >= 500) { await sleep(wait); continue; }
-      if (!res.ok) {
-        const err = await res.json().catch(() => null);
-        throw new Error(err?.error?.message || `Gemini error ${res.status}`);
+      if (res.status === 429 || res.status >= 500) {
+        lastError = "The AI service is busy. Wait a minute and try again.";
+        await sleep(2000 * (attempt + 1));
+        continue;
       }
-      const j = await res.json();
-      const text = (j?.candidates?.[0]?.content?.parts || []).map((p) => p.text || "").join("");
+      const j = await res.json().catch(() => null);
+      if (!res.ok) throw Object.assign(new Error(j?.error?.message || `OpenAI error ${res.status}`), { final: true });
+      const text = j?.output_text ?? (j?.output || []).flatMap((o) => o.content || []).filter((c) => c.type === "output_text").map((c) => c.text || "").join("");
       const parsed = parseJson(text);
       if (!parsed) throw new Error("Could not read the AI answer.");
       return parsed;
     } catch (e) {
-      if (attempt === MAX_RETRIES - 1) throw e;
-      await sleep(wait);
+      lastError = e.message;
+      if (e.final || attempt === MAX_RETRIES - 1) throw e;
+      await sleep(2000 * (attempt + 1));
     }
   }
-  throw new Error("The AI service is busy. Wait a minute and try again.");
+  throw new Error(lastError);
 }
 
 function normalize(p) {
@@ -160,7 +146,7 @@ function normalize(p) {
 
 export async function POST(req) {
   try {
-    if (!KEYS.length) return NextResponse.json({ error: "No GEMINI_API_KEY is set on the server." }, { status: 500 });
+    if (!process.env.OPENAI_API_KEY) return NextResponse.json({ error: "No OPENAI_API_KEY is set on the server." }, { status: 500 });
 
     // Only signed-in staff who may edit documents can spend AI credits
     const auth = req.headers.get("authorization") || "";
@@ -183,7 +169,7 @@ export async function POST(req) {
         const mime = isPdf ? "application/pdf" : (f.mimeType || "").startsWith("image/") ? f.mimeType : "image/jpeg";
         if (!f.base64Data) throw new Error("Empty file.");
         if (Buffer.byteLength(f.base64Data, "base64") > 15 * 1048576) throw new Error("File is over 15 MB.");
-        results.push({ fileName: name, ok: true, data: normalize(await callGemini(f.base64Data, mime)) });
+        results.push({ fileName: name, ok: true, data: normalize(await callLuna(f.base64Data, mime, name)) });
       } catch (e) {
         results.push({ fileName: san(f.fileName), ok: false, error: e.message || "Extraction failed." });
       }
