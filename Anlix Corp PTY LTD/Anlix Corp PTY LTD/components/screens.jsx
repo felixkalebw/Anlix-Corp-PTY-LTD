@@ -187,9 +187,9 @@ export function Orders() {
   )
 }
 
-const MaterialPlan = ({ lines, title = 'Materials and production cost', allow, jc }) => {
+const MaterialPlan = ({ lines, title = 'Materials and production cost', order, jc }) => {
   const { S } = useApp()
-  const m = materialPlan(S, lines, allow)
+  const m = materialPlan(S, lines, order)
   return (
     <div className="card"><h2>{title}</h2>
       {m.shirts ? (
@@ -197,19 +197,20 @@ const MaterialPlan = ({ lines, title = 'Materials and production cost', allow, j
           <Table head={['Colour', 'Fabric', 'Sizes', 'Shirts', 'Pattern (m)', 'With tolerance (m)', 'Fabric cost', 'Production cost']} right={3}>
             {m.rows.map((g) => (
               <tr key={g.colour + '|' + g.fabric}><td>{g.colour}</td><td>{g.fabric || '–'}</td><td>{g.sizeText}</td><td className="r">{g.shirts}</td>
-                <td className="r">{g.base.toFixed(2)}</td><td className="r">{g.metres.toFixed(2)}</td><td className="r">{f2(g.fabricCost)}</td><td className="r">{f2(g.cost)}</td></tr>
+                <td className="r">{g.metres.toFixed(2)}</td><td className="r">{g.allow.toFixed(2)}</td><td className="r">{f2(g.fabricCost)}</td><td className="r">{f2(g.cost)}</td></tr>
             ))}
           </Table>
-          <div className="tot"><span>Pattern metres (theoretical)</span><span>{m.base.toFixed(2)} m</span></div>
-          <div className="tot"><span>{m.tol > 0 ? `Metre tolerance, ${m.tol}%` : 'Metre tolerance'}</span><span>{m.tol > 0 ? `+${(m.metres - m.base).toFixed(2)} m` : 'None applied'}</span></div>
-          <div className="tot big"><span>Fabric to allow for</span><span>{m.metres.toFixed(2)} m</span></div>
+          <div className="tot"><span>Pattern metres (theoretical)</span><span>{m.metres.toFixed(2)} m</span></div>
+          <div className="tot"><span>{m.tol > 0 ? `Metre tolerance, ${m.tol}%` : 'Metre tolerance'}</span><span>{m.tol > 0 ? `+${(m.allow - m.metres).toFixed(2)} m` : 'None applied'}</span></div>
+          <div className="tot big"><span>Fabric to allow for</span><span>{m.allow.toFixed(2)} m</span></div>
+          {m.actual !== null && <div className="tot"><span>Actual metres printed</span><span>{m.actual.toFixed(2)} m</span></div>}
           <div className="tot"><span>Fabric, {m.metres.toFixed(2)} m at {f2(S.R.fabric)} per m</span><span>{f2(m.parts.fabric)}</span></div>
           <div className="tot"><span>Printing, at {f2(S.R.print)} per m</span><span>{f2(m.parts.print)}</span></div>
           <div className="tot"><span>Pressing, at {f2(S.R.press)} per m</span><span>{f2(m.parts.press)}</span></div>
           <div className="tot"><span>Sewing, {m.shirts} shirts at {f2(S.R.sew)}</span><span>{f2(m.parts.sew)}</span></div>
           <div className="tot big"><span>Production cost</span><span>{f2(m.total)}</span></div>
           <div className="tot"><span>Average per shirt</span><span>{f2(m.avg)}</span></div>
-          <p className="sub">Pattern metres are pattern height × quantity. {m.tol > 0 ? `The ${m.tol}% metre tolerance is added for layout waste and is included in the cost above. ` : 'No metre tolerance was costed into this job. '}Change the tolerance in Costing and prices. Rework is costed separately.</p>
+          <p className="sub">Pattern metres are pattern height × quantity. {m.tol > 0 ? `The ${m.tol}% metre tolerance is the extra fabric to allow for layout waste. The cost above is on pattern metres; if the full tolerance is used it rises to ${f2(m.tolTotal)}. ` : 'No metre tolerance was costed into this job. '}Change the tolerance in Costing and prices. Rework is costed separately.</p>
           {jc && <p className="sub">Once the job is cut, enter the metres actually used on the <Link href="/variance">Metre variance</Link> page.</p>}
         </>
       ) : <p className="sub">Add items with a valid size and quantity to see the fabric needed and the cost of production.</p>}
@@ -366,8 +367,8 @@ export function NewOrder() {
             <div className="tot"><span>Discount</span><span>−{f2(c.d)}</span></div>
             <div className="tot big"><span>Net total</span><span>{f2(c.net)}</span></div>
             <div className="tot"><span>Payment required before production</span><span>{f2(c.req)}</span></div>
-            {mp.shirts > 0 && <div className="tot"><span>Fabric to cut ({mp.base.toFixed(2)} m pattern{tolPct(S) > 0 ? ` + ${tolPct(S)}% tolerance` : ''})</span><span>{mp.metres.toFixed(2)} m</span></div>}
-            <div className="tot"><span>Production cost{tolPct(S) > 0 ? `, incl. ${tolPct(S)}% metre tolerance` : ''}</span><span>{f2(c.cs)}</span></div>
+            {mp.shirts > 0 && <div className="tot"><span>Fabric to cut ({mp.metres.toFixed(2)} m pattern{tolPct(S) > 0 ? ` + ${tolPct(S)}% tolerance` : ''})</span><span>{mp.allow.toFixed(2)} m</span></div>}
+            <div className="tot"><span>Production cost, on pattern metres</span><span>{f2(c.cs)}</span></div>
             {c.net > 0 && <div className="tot"><span>Expected margin</span><span>{pc(c.gp / c.net)}</span></div>}
             {c.net > 0 && c.net < c.cs && <div className="note w">The net total is below production cost.</div>}
             {err && <div className="note w" role="alert">{err}</div>}
@@ -430,7 +431,7 @@ export function Job() {
             <div className="tot big"><span>Net total</span><span>{f2(c.net)}</span></div>
             <div className="tot"><span>Production cost</span><span>{f2(c.cs)}</span></div>
             <div className="tot"><span>Gross profit</span><span>{f2(c.gp)}</span></div></div>
-          <MaterialPlan lines={o.lines} title="Materials required" allow={+o.allow || 0} jc={o.jc} />
+          <MaterialPlan lines={o.lines} title="Materials required" order={o} jc={o.jc} />
           <Production o={o} c={c} />
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
