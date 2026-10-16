@@ -6,7 +6,7 @@ import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, Cart
 import { useApp } from './Store'
 import { supabase } from '@/lib/supabase'
 import { isCompleted } from './Invoice'
-import { TODAY, f2, f0, pc, fd, sum, sz, cost, price, qty, calc, unit, alerts, snapshot, costParts, jobNo, materialPlan, tolPct, COST_N, STAGES, mkStages, isDone, progress, overdue, phase, phaseTag } from '@/lib/model'
+import { TODAY, ONE, f2, f0, pc, fd, sum, sz, cost, price, qty, calc, unit, alerts, snapshot, costParts, jobNo, materialPlan, tolPct, COST_N, STAGES, mkStages, isDone, progress, overdue, phase, phaseTag, mkLine, lineH, lineLabel, prodOf, isFixed, typeGaps, typeMult, baseRates } from '@/lib/model'
 
 const Head = ({ title, sub }) => {
   const { S, dispatch } = useApp()
@@ -29,6 +29,13 @@ const Tag = ({ o }) => { const { S } = useApp(); const p = phase(S, o); return <
 const Num = ({ label, value, onSave, ro }) => (
   <label>{label}<input type="number" step="any" min="0" disabled={ro} defaultValue={value} key={value} onBlur={(e) => onSave(parseFloat(e.target.value) || 0)} /></label>
 )
+
+// Number box where blank means "use the default". The default is shown as the placeholder.
+const Ov = ({ value, ph, onSave, ro, w = 84, label }) => (
+  <input type="number" step="any" min="0" disabled={ro} defaultValue={value ?? ''} key={String(value ?? '')} placeholder={ph} aria-label={label} style={{ width: w, margin: '0 0 0 auto' }}
+    onBlur={(e) => { const raw = e.target.value.trim(); if (raw === String(value ?? '')) return; if (raw === '') return onSave(''); const v = parseFloat(raw); if (v >= 0) onSave(v) }} />
+)
+const tidy = (n) => String(+(+n).toFixed(3))
 
 function OrdersTable({ list }) {
   const { S } = useApp()
@@ -194,9 +201,9 @@ const MaterialPlan = ({ lines, title = 'Materials and production cost', order, j
     <div className="card"><h2>{title}</h2>
       {m.shirts ? (
         <>
-          <Table head={['Colour', 'Fabric', 'Sizes', 'Shirts', 'Pattern (m)', 'With tolerance (m)', 'Fabric cost', 'Production cost']} right={3}>
+          <Table head={['Item', 'Colour', 'Fabric', 'Sizes', 'Pieces', 'Pattern (m)', 'With tolerance (m)', 'Material cost', 'Production cost']} right={4}>
             {m.rows.map((g) => (
-              <tr key={g.colour + '|' + g.fabric}><td>{g.colour}</td><td>{g.fabric || '–'}</td><td>{g.sizeText}</td><td className="r">{g.shirts}</td>
+              <tr key={g.type + '|' + g.colour + '|' + g.fabric}><td>{g.type || 'T-shirt'}</td><td>{g.colour}</td><td>{g.fabric || '–'}</td><td>{g.sizeText}</td><td className="r">{g.shirts}</td>
                 <td className="r">{g.metres.toFixed(2)}</td><td className="r">{g.allow.toFixed(2)}</td><td className="r">{f2(g.fabricCost)}</td><td className="r">{f2(g.cost)}</td></tr>
             ))}
           </Table>
@@ -204,16 +211,16 @@ const MaterialPlan = ({ lines, title = 'Materials and production cost', order, j
           <div className="tot"><span>{m.tol > 0 ? `Metre tolerance, ${m.tol}%` : 'Metre tolerance'}</span><span>{m.tol > 0 ? `+${(m.allow - m.metres).toFixed(2)} m` : 'None applied'}</span></div>
           <div className="tot big"><span>Fabric to allow for</span><span>{m.allow.toFixed(2)} m</span></div>
           {m.actual !== null && <div className="tot"><span>Actual metres printed</span><span>{m.actual.toFixed(2)} m</span></div>}
-          <div className="tot"><span>Fabric, {m.metres.toFixed(2)} m at {f2(S.R.fabric)} per m</span><span>{f2(m.parts.fabric)}</span></div>
-          <div className="tot"><span>Printing, at {f2(S.R.print)} per m</span><span>{f2(m.parts.print)}</span></div>
-          <div className="tot"><span>Pressing, at {f2(S.R.press)} per m</span><span>{f2(m.parts.press)}</span></div>
-          <div className="tot"><span>Sewing, {m.shirts} shirts at {f2(S.R.sew)}</span><span>{f2(m.parts.sew)}</span></div>
+          <div className="tot"><span>Material, {m.metres.toFixed(2)} m (average {f2(m.metres ? m.parts.fabric / m.metres : 0)} per m)</span><span>{f2(m.parts.fabric)}</span></div>
+          <div className="tot"><span>Printing (average {f2(m.metres ? m.parts.print / m.metres : 0)} per m)</span><span>{f2(m.parts.print)}</span></div>
+          <div className="tot"><span>Pressing (average {f2(m.metres ? m.parts.press / m.metres : 0)} per m)</span><span>{f2(m.parts.press)}</span></div>
+          <div className="tot"><span>Making, {m.shirts} pieces (average {f2(m.shirts ? m.parts.sew / m.shirts : 0)} each)</span><span>{f2(m.parts.sew)}</span></div>
           <div className="tot big"><span>Production cost</span><span>{f2(m.total)}</span></div>
-          <div className="tot"><span>Average per shirt</span><span>{f2(m.avg)}</span></div>
-          <p className="sub">Pattern metres are pattern height × quantity. {m.tol > 0 ? `The ${m.tol}% metre tolerance is the extra fabric to allow for layout waste. The cost above is on pattern metres; if the full tolerance is used it rises to ${f2(m.tolTotal)}. ` : 'No metre tolerance was costed into this job. '}Change the tolerance in Costing and prices. Rework is costed separately.</p>
+          <div className="tot"><span>Average per piece</span><span>{f2(m.avg)}</span></div>
+          <p className="sub">Metres per piece come from the size's pattern height for sized items, or the set metres for hats and banners, times the quantity. {m.tol > 0 ? `The ${m.tol}% metre tolerance is the extra fabric to allow for layout waste. The cost above is on pattern metres; if the full tolerance is used it rises to ${f2(m.tolTotal)}. ` : 'No metre tolerance was costed into this job. '}Change the tolerance in Costing and prices. Rework is costed separately.</p>
           {jc && <p className="sub">Once the job is cut, enter the metres actually used on the <Link href="/variance">Metre variance</Link> page.</p>}
         </>
-      ) : <p className="sub">Add items with a valid size and quantity to see the fabric needed and the cost of production.</p>}
+      ) : <p className="sub">Add items with a quantity to see the material needed and the cost of production.</p>}
     </div>
   )
 }
@@ -222,15 +229,20 @@ const LIST_HINT = 'Black T-shirts: 5 x M, 10 x L, 2 x XL\nRoyal blue golf shirt 
 
 export function NewOrder() {
   const { S, dispatch } = useApp(), router = useRouter(), nid = useRef(0)
-  const mk = (o) => ({ id: ++nid.current, s: '', q: 1, colour: '', fabric: '', desc: '', ...o })
+  const mk = (o) => ({ id: ++nid.current, s: '', q: 1, type: '', colour: '', fabric: '', desc: '', m: '', fabricRate: '', sewRate: '', unitPrice: '', ...o })
   const [d, setD] = useState({ by: '', placed: '', ent: '', phone: '', dueDate: '', dt: '%', dv: 0, dr: '' }), [lines, setLines] = useState([])
-  const [tab, setTab] = useState('add'), [f, setF] = useState({ s: S.sizes[0].n, q: 1, colour: '', fabric: '', desc: '' })
+  const [tab, setTab] = useState('add'), [f, setF] = useState({ type: '', s: S.sizes[0].n, q: 1, colour: '', fabric: '', desc: '' })
   const [txt, setTxt] = useState(''), [busy, setBusy] = useState(false), [msg, setMsg] = useState(''), [warns, setWarns] = useState([]), [perr, setPerr] = useState('')
   const [err, setErr] = useState(''), [tried, setTried] = useState(false)
   const set = (k) => (e) => setD({ ...d, [k]: e.target.value })
   const setF1 = (k) => (e) => setF({ ...f, [k]: e.target.value })
-  const good = lines.filter((l) => sz(S, l.s) && l.q > 0), bad = lines.length - good.length
-  const c = calc(S, { lines: good, dt: d.dt, dv: d.dv, pays: [] }), q = c.q, mp = materialPlan(S, good)
+  // Metres typed per piece are entered in metres; the model keeps them in mm.
+  const norm = (l) => ({ ...l, h: parseFloat(l.m) > 0 ? parseFloat(l.m) * 1000 : '' })
+  const good = lines.filter((l) => sz(S, l.s) && l.q > 0).map(norm), bad = lines.length - good.length
+  // Cost and price every line the way it will be saved, so this page shows the same figures as the job card.
+  const qn = sum(good, (l) => l.q), built = good.map((l) => mkLine(S, l, qn))
+  const c = calc(S, { lines: built, dt: d.dt, dv: d.dv, pays: [] }), q = c.q, mp = materialPlan(S, built)
+  const pd = prodOf(S, f.type), gaps = pd ? typeGaps(S, pd) : []
   const staffOk = d.by.trim().length >= 2
   const known = [...new Set(S.orders.map((o) => o.by).filter(Boolean))]
   const colours = [...new Set(lines.map((l) => l.colour).filter(Boolean))]
@@ -242,12 +254,21 @@ export function NewOrder() {
     const n = Math.floor(+f.q)
     if (!(n > 0)) return setErr('Quantity must be at least 1.')
     const colour = f.colour.trim(), fabric = f.fabric.trim(), desc = f.desc.trim(), lc = (v) => (v || '').toLowerCase()
-    const same = (l) => l.s === f.s && lc(l.colour) === lc(colour) && lc(l.fabric) === lc(fabric) && lc(l.desc) === lc(desc) && !l.unitPrice
+    const s = isFixed(prodOf(S, f.type)) ? ONE : f.s
+    const same = (l) => l.type === f.type && l.s === s && lc(l.colour) === lc(colour) && lc(l.fabric) === lc(fabric) && lc(l.desc) === lc(desc) && !l.unitPrice && !l.m && !l.fabricRate && !l.sewRate
     setErr('')
-    setLines((ls) => (ls.some(same) ? ls.map((l) => (same(l) ? { ...l, q: l.q + n } : l)) : [...ls, mk({ s: f.s, q: n, colour, fabric, desc })]))
+    setLines((ls) => (ls.some(same) ? ls.map((l) => (same(l) ? { ...l, q: l.q + n } : l)) : [...ls, mk({ type: f.type, s, q: n, colour, fabric, desc })]))
     setF({ ...f, q: 1, desc: '' })
   }
-  const edit = (id, k, v) => setLines((ls) => ls.map((l) => (l.id === id ? { ...l, [k]: v, src: undefined } : l)))
+  const edit = (id, k, v) => setLines((ls) => ls.map((l) => {
+    if (l.id !== id) return l
+    const n = { ...l, [k]: v, src: undefined }
+    if (k === 'type') { // a new product starts from its own defaults
+      n.m = ''; n.fabricRate = ''; n.sewRate = ''; n.unitPrice = ''
+      if (isFixed(prodOf(S, v))) n.s = ONE; else if (n.s === ONE) n.s = S.sizes[0].n
+    }
+    return n
+  }))
   const drop = (id) => setLines((ls) => ls.filter((l) => l.id !== id))
 
   // Manual override: paste a list, the AI reads sizes, colours and garments, and the lines are sorted by size then colour.
@@ -279,6 +300,9 @@ export function NewOrder() {
     if (bad) return setErr(`${bad} item line${bad > 1 ? 's need' : ' needs'} a size and a quantity of at least 1.`)
     if (!d.placed.trim() || !d.ent.trim()) return setErr('Enter who placed the order and their entity or company.')
     if (+d.dv > 0 && !d.dr.trim()) return setErr('Enter a reason for the discount.')
+    const np = built.find((l) => !(l.unitPrice > 0)), nm = built.find((l) => !(lineH(S, l) > 0))
+    if (np) return setErr(`${lineLabel(np) || np.type || 'An item'} has no selling price. Type one in its Unit price box, or set it for ${np.type || 'the item'} on the Costing page.`)
+    if (nm) return setErr(`${lineLabel(nm) || nm.type || 'An item'} has no metres per piece. Type them in its Metres per piece box, or set them on the Costing page.`)
     setErr('')
     const jc = jobNo(S); dispatch({ type: 'register', d: { ...d, by: d.by.trim() }, lines: good }); router.push('/orders/' + jc)
   }
@@ -316,14 +340,16 @@ export function NewOrder() {
           {tab === 'add' ? (
             <div style={{ marginTop: 12 }}>
               <div className="fm">
-                <label>Size<select value={f.s} onChange={setF1('s')}>{S.sizes.map((z) => <option key={z.n}>{z.n}</option>)}</select></label>
+                <label>Category<select value={f.type} onChange={setF1('type')}><option value="">T-shirt</option>{S.types.map((p) => <option key={p.n} value={p.n}>{p.n}{typeGaps(S, p).length ? ' (needs setup)' : ''}</option>)}</select></label>
+                {!isFixed(pd) && <label>Size<select value={f.s} onChange={setF1('s')}>{S.sizes.map((z) => <option key={z.n}>{z.n}</option>)}</select></label>}
                 <label>Quantity<input type="number" min="1" value={f.q} onChange={setF1('q')} /></label>
                 <label>Colour<input list="order-colours" value={f.colour} onChange={setF1('colour')} placeholder="e.g. Black" /><datalist id="order-colours">{colours.map((x) => <option key={x} value={x} />)}</datalist></label>
                 <label>Fabric (optional)<input value={f.fabric} onChange={setF1('fabric')} placeholder="e.g. Cotton" /></label>
                 <label>Description<input value={f.desc} onChange={setF1('desc')} placeholder="e.g. Logo on chest, name on back" /></label>
                 <button className="btn" onClick={add}>Add to order</button>
               </div>
-              <p className="sub">Add as many sizes as you need. Each line keeps its own colour and description, so one order can mix sizes and designs.</p>
+              {gaps.length > 0 && <div className="note w">{pd.n} still needs: {gaps.join(', ')}. Set {gaps.length > 1 ? 'them' : 'it'} on the <Link href="/costing">Costing page</Link>, or type the figures on the order line below.</div>}
+              <p className="sub">Add as many items as you need. Each line keeps its own category, size, colour and description, so one order can mix products and designs. Material price per metre, making fee, metres per piece and unit price can be typed on each line below; leave a box blank to use the default shown in it.</p>
             </div>
           ) : (
             <div style={{ marginTop: 12 }}>
@@ -341,16 +367,21 @@ export function NewOrder() {
           <h2 style={{ marginTop: 18 }}>Items in this order</h2>
           {lines.length ? (
             <>
-              <Table head={['Size', 'Qty', 'Colour', 'Fabric', 'Description', 'Unit price', 'Line total', '']} right={99}>
-                {lines.map((l) => { const okL = sz(S, l.s) && l.q > 0, u = okL ? unit(S, l, q) : null; return (
+              <Table head={['Category', 'Size', 'Qty', 'Colour', 'Fabric', 'Description', 'Metres per piece', 'Material per m', 'Making fee', 'Unit price', 'Line total', '']} right={99}>
+                {lines.map((l) => { const okL = sz(S, l.s) && l.q > 0, bl = okL ? mkLine(S, norm(l), qn) : null, u = bl ? unit(S, bl, qn) : null, dr = baseRates(S, l.type), fx = isFixed(prodOf(S, l.type)); return (
                   <tr key={l.id}>
-                    <td><select style={cell} value={l.s} aria-label="Size" aria-invalid={!sz(S, l.s)} onChange={(e) => edit(l.id, 's', e.target.value)}>{!sz(S, l.s) && <option value="">Choose size</option>}{S.sizes.map((z) => <option key={z.n}>{z.n}</option>)}</select></td>
+                    <td><select style={{ ...cell, minWidth: 130 }} value={l.type} aria-label="Category" onChange={(e) => edit(l.id, 'type', e.target.value)}><option value="">T-shirt</option>{S.types.map((p) => <option key={p.n} value={p.n}>{p.n}</option>)}</select></td>
+                    <td>{fx ? '–' : <select style={cell} value={l.s} aria-label="Size" aria-invalid={!sz(S, l.s)} onChange={(e) => edit(l.id, 's', e.target.value)}>{!sz(S, l.s) && <option value="">Choose size</option>}{S.sizes.map((z) => <option key={z.n}>{z.n}</option>)}</select>}</td>
                     <td style={{ width: 90 }}><input style={cell} type="number" min="1" value={l.q} aria-label="Quantity" onFocus={(e) => e.target.select()} onChange={(e) => edit(l.id, 'q', Math.max(0, Math.floor(+e.target.value) || 0))} /></td>
                     <td><input style={{ ...cell, minWidth: 110 }} value={l.colour} aria-label="Colour" list="order-colours" onChange={(e) => edit(l.id, 'colour', e.target.value)} /></td>
                     <td><input style={{ ...cell, minWidth: 100 }} value={l.fabric} aria-label="Fabric" onChange={(e) => edit(l.id, 'fabric', e.target.value)} /></td>
                     <td><input style={{ ...cell, minWidth: 200 }} value={l.desc} aria-label="Description" placeholder="Description" onChange={(e) => edit(l.id, 'desc', e.target.value)} /></td>
-                    <td className="r">{u ? f2(u.price) : '–'}</td><td className="r">{u ? f2(l.q * u.price) : '–'}</td>
-                    <td><button className="btn o" onClick={() => drop(l.id)} aria-label={'Remove ' + (l.s || 'item')}>Remove</button></td>
+                    <td><input style={{ ...cell, width: 96 }} type="number" step="any" min="0" value={l.m} aria-label="Metres per piece" placeholder={okL ? tidy(lineH(S, { s: l.s, type: l.type }) / 1000) : ''} onChange={(e) => edit(l.id, 'm', e.target.value)} /></td>
+                    <td><input style={{ ...cell, width: 90 }} type="number" step="any" min="0" value={l.fabricRate} aria-label="Material price per metre" placeholder={tidy(dr.fabric)} onChange={(e) => edit(l.id, 'fabricRate', e.target.value)} /></td>
+                    <td><input style={{ ...cell, width: 90 }} type="number" step="any" min="0" value={l.sewRate} aria-label="Making fee per piece" placeholder={tidy(dr.sew)} onChange={(e) => edit(l.id, 'sewRate', e.target.value)} /></td>
+                    <td><input style={{ ...cell, width: 90 }} type="number" step="any" min="0" value={l.unitPrice} aria-label="Unit price" placeholder={okL ? tidy(price(S, sz(S, l.s), qn, l.type)) : ''} onChange={(e) => edit(l.id, 'unitPrice', e.target.value)} /></td>
+                    <td className="r">{u ? f2(l.q * u.price) : '–'}</td>
+                    <td><button className="btn o" onClick={() => drop(l.id)} aria-label={'Remove ' + (l.type || l.s || 'item')}>Remove</button></td>
                   </tr>) })}
               </Table>
               {bad > 0 && <div className="note w">{bad} line{bad > 1 ? 's need' : ' needs'} a size and a quantity of at least 1 before the order can be registered.</div>}
@@ -360,9 +391,9 @@ export function NewOrder() {
         </div>
 
         <div className="grid">
-          <MaterialPlan lines={good} />
+          <MaterialPlan lines={built} />
           <div className="card"><h2>Pricing and payment</h2>
-            <div className={'note' + (q && q < S.thr ? ' w' : '')}>{q ? (q < S.thr ? `${q} shirts, under ${S.thr}: higher prices apply and the full amount is paid before production.` : `${q} shirts: ${S.thr}+ prices apply and a ${S.dep}% deposit is paid before production.`) : 'Add items to see prices.'}</div>
+            <div className={'note' + (q && q < S.thr ? ' w' : '')}>{q ? (q < S.thr ? `${q} items, under ${S.thr}: higher prices apply and the full amount is paid before production.` : `${q} items: ${S.thr}+ prices apply and a ${S.dep}% deposit is paid before production.`) : 'Add items to see prices.'}</div>
             <div className="tot"><span>Subtotal</span><span>{f2(c.sub)}</span></div>
             <div className="tot"><span>Discount</span><span>−{f2(c.d)}</span></div>
             <div className="tot big"><span>Net total</span><span>{f2(c.net)}</span></div>
@@ -423,8 +454,8 @@ export function Job() {
           <div className="card"><h2>Order details</h2>
             <div className="kp">{[['Order date', fd(o.date)], ['Due date', o.dueDate ? fd(o.dueDate) : '–'], ['Received by', o.by], ['Placed by', o.placed], ['Entity', o.ent], ['Phone', o.phone || '–']].map(([l, v]) => <div key={l}><div className="sub">{l}</div>{v}</div>)}</div></div>
           <div className="card"><h2>Order lines</h2>
-            <Table head={['Size', 'Colour', 'Description', 'Qty', 'Unit price', 'Unit cost', 'Line total']} right={3}>
-              {o.lines.map((l, i) => { const u = unit(S, l, c.q); return <tr key={i}><td>{l.s}</td><td>{l.colour || '–'}</td><td>{[l.fabric, l.desc].filter(Boolean).join(' · ') || '–'}</td><td className="r">{l.q}</td><td className="r">{f2(u.price)}</td><td className="r">{f2(u.cost)}</td><td className="r">{f2(l.q * u.price)}</td></tr> })}
+            <Table head={['Item', 'Size', 'Colour', 'Description', 'Qty', 'Unit price', 'Unit cost', 'Line total']} right={4}>
+              {o.lines.map((l, i) => { const u = unit(S, l, c.q); return <tr key={i}><td>{l.type || 'T-shirt'}</td><td>{l.s === ONE ? '–' : l.s}</td><td>{l.colour || '–'}</td><td>{[l.fabric, l.desc].filter(Boolean).join(' · ') || '–'}</td><td className="r">{l.q}</td><td className="r">{f2(u.price)}</td><td className="r">{f2(u.cost)}</td><td className="r">{f2(l.q * u.price)}</td></tr> })}
             </Table>
             <div className="tot"><span>Subtotal</span><span>{f2(c.sub)}</span></div>
             <div className="tot"><span>Discount{o.dv ? ': ' + o.dr : ''}</span><span>−{f2(c.d)}</span></div>
@@ -470,20 +501,95 @@ export function Payments() {
   )
 }
 
+const NP0 = { n: '', mode: 'fixed', m: '', metres: '', fabric: '', print: '', press: '', sew: '', a0: '', a1: '', k0: '', k1: '' }
+
 export function Costing() {
-  const { S, dispatch, canEdit } = useApp(), [z, setZ] = useState({ n: '', c: 'adult', h: '' })
+  const { S, dispatch, canEdit } = useApp(), [z, setZ] = useState({ n: '', c: 'adult', h: '' }), [np, setNp] = useState(NP0), [npErr, setNpErr] = useState('')
   const R = (k, label) => <Num ro={!canEdit} key={k} label={label} value={S.R[k]} onSave={(v) => v !== S.R[k] && dispatch({ type: 'rate', k, v })} />
   const T = (c, j, label) => <Num ro={!canEdit} key={c + j} label={label} value={S.T[c][j]} onSave={(v) => v !== S.T[c][j] && dispatch({ type: 'tier', c, j, v })} />
   const G = (k, label) => <Num ro={!canEdit} key={k} label={label} value={S[k]} onSave={(v) => v !== S[k] && dispatch({ type: 'setting', k, v })} />
+  const used = new Set(S.orders.flatMap((o) => o.lines.map((l) => l.type)))
+  const ref = S.sizes.find((x) => x.n === 'M') || S.sizes[0]
+  const pcost = (p) => { const r = baseRates(S, p.n), m = isFixed(p) ? +p.metres || 0 : (ref.h / 1000) * typeMult(S, p.n); return m * (r.fabric + r.print + r.press) + r.sew }
+  const setN = (k) => (e) => setNp({ ...np, [k]: e.target.value })
+  const addProduct = () => {
+    const n = np.n.trim(), fixed = np.mode === 'fixed'
+    if (!n) return setNpErr('Enter a name for the product.')
+    if (S.types.some((x) => x.n.toLowerCase() === n.toLowerCase())) return setNpErr(`${n} is already in the catalogue.`)
+    if (fixed ? !(+np.metres > 0) : !(+np.m > 0)) return setNpErr(fixed ? 'Enter the metres of material one piece uses.' : 'Enter the fabric multiplier, for example 1.5 if it uses one and a half times the shirt length.')
+    setNpErr('')
+    dispatch({ type: 'addType', p: { n, mode: np.mode, m: np.m, metres: np.metres, fabric: np.fabric, print: np.print, press: np.press, sew: np.sew, price: { adult: [np.a0, np.a1], kids: [np.k0, np.k1] } } })
+    setNp(NP0)
+  }
+  const legacy = (p) => !p.mode
   return (
     <>
       <Head title="Costing and prices" sub={canEdit ? 'Changes recalculate every cost and margin. Orders keep the prices and costs saved when they were registered.' : 'Only an admin can change prices, rates and deposit rules.'} />
       <div className="grid">
-        <div className="card"><h2>Cost rates</h2><div className="fm">{R('print', 'Printing, per metre')}{R('fabric', 'Fabric, per metre')}{R('press', 'Pressing, per metre')}{R('sew', 'Sewing, per shirt')}{G('tol', 'Metre tolerance, ±% (costed into new orders)')}</div></div>
-        <div className="card"><h2>Prices and payment rules</h2><div className="fm">
+        <div className="card"><h2>Default cost rates</h2><div className="fm">{R('print', 'Printing, per metre')}{R('fabric', 'Material, per metre')}{R('press', 'Pressing, per metre')}{R('sew', 'Making fee, per piece')}{G('tol', 'Metre tolerance, ±% (costed into new orders)')}</div>
+          <p className="sub">Used by T-shirts and by any product below that leaves a box blank.</p></div>
+        <div className="card"><h2>T-shirt prices and payment rules</h2><div className="fm">
           {T('adult', 0, `Adult, under ${S.thr}`)}{T('adult', 1, `Adult, ${S.thr}+`)}{T('kids', 0, `Kids, under ${S.thr}`)}{T('kids', 1, `Kids, ${S.thr}+`)}
-          {G('thr', 'Bulk threshold, shirts')}{G('dep', 'Deposit for bulk orders, %')}</div></div>
+          {G('thr', 'Bulk threshold, pieces')}{G('dep', 'Deposit for bulk orders, %')}</div></div>
       </div>
+
+      <div className="card"><h2>Products: material and making cost</h2>
+        <p className="sub">Type the material price per metre and the other costs for each product. Leave a box blank to use the default shown in it. Fixed products use a set number of metres per piece (hats, banners). Sized products use the size's pattern height times a multiplier (dress, track suit).</p>
+        <Table head={['Product', 'Method', 'Metres per piece / multiplier', 'Material, per metre', 'Printing, per metre', 'Pressing, per metre', 'Making fee, per piece', 'Cost per piece', '']} right={2}>
+          {S.types.map((p, i) => { const gaps = typeGaps(S, p); return (
+            <tr key={p.n}>
+              <td>{p.n}{gaps.length > 0 && <span className="tag a" style={{ marginLeft: 8 }}>Needs {gaps.join(', ')}</span>}</td>
+              <td>{isFixed(p) ? 'Fixed metres' : legacy(p) ? 'T-shirt' : 'Sized'}</td>
+              <td className="r">{isFixed(p)
+                ? <Ov ro={!canEdit} label={'Metres per piece for ' + p.n} value={p.metres} ph="e.g. 0.1" onSave={(v) => v !== '' && dispatch({ type: 'typeRate', i, k: 'metres', v })} />
+                : <Ov ro={!canEdit} label={'Fabric multiplier for ' + p.n} value={p.m} ph="1" onSave={(v) => v !== '' && dispatch({ type: 'typeMult', i, v })} />}</td>
+              {['fabric', 'print', 'press', 'sew'].map((k) => <td className="r" key={k}><Ov ro={!canEdit} label={`${k} for ${p.n}`} value={p[k]} ph={tidy(S.R[k])} onSave={(v) => dispatch({ type: 'typeRate', i, k, v })} /></td>)}
+              <td className="r">{isFixed(p) ? f2(pcost(p)) : `${ref.n}: ${f2(pcost(p))}`}</td>
+              <td><button className="btn o" disabled={!canEdit || used.has(p.n)} title={used.has(p.n) ? 'An order uses this product, so it cannot be removed.' : ''} onClick={() => dispatch({ type: 'delType', i })} aria-label={'Remove ' + p.n}>Remove</button></td>
+            </tr>) })}
+        </Table>
+      </div>
+
+      <div className="card"><h2>Products: selling prices</h2>
+        <p className="sub">Type the selling price by hand. Fixed products have one price (standard); sized products have an adult and a kids price. The first price applies under {S.thr} pieces in an order, the second at {S.thr}+; if you leave the {S.thr}+ price blank the standard price is used. T-shirt types use the T-shirt prices above.</p>
+        <Table head={['Product', `Standard / adult, under ${S.thr}`, `Standard / adult, ${S.thr}+`, `Kids, under ${S.thr}`, `Kids, ${S.thr}+`, 'Margin at the first price']} right={1}>
+          {S.types.map((p, i) => { const pr = p.price || {}, a = pr.adult || ['', ''], k = pr.kids || ['', ''], c = pcost(p), first = a[0] !== '' ? a[0] : a[1], m = first !== '' && +first > 0 ? (+first - c) / +first : null; return (
+            <tr key={p.n}>
+              <td>{p.n}</td>
+              {legacy(p)
+                ? <td colSpan={4} className="sub">Uses the T-shirt prices above</td>
+                : <>
+                  <td className="r"><Ov ro={!canEdit} label={`Price of ${p.n}, under ${S.thr}`} value={a[0]} ph="Not set" onSave={(v) => dispatch({ type: 'typePrice', i, c: 'adult', j: 0, v })} /></td>
+                  <td className="r"><Ov ro={!canEdit} label={`Price of ${p.n}, ${S.thr}+`} value={a[1]} ph="Same" onSave={(v) => dispatch({ type: 'typePrice', i, c: 'adult', j: 1, v })} /></td>
+                  <td className="r">{isFixed(p) ? '–' : <Ov ro={!canEdit} label={`Kids price of ${p.n}, under ${S.thr}`} value={k[0]} ph="Not set" onSave={(v) => dispatch({ type: 'typePrice', i, c: 'kids', j: 0, v })} />}</td>
+                  <td className="r">{isFixed(p) ? '–' : <Ov ro={!canEdit} label={`Kids price of ${p.n}, ${S.thr}+`} value={k[1]} ph="Same" onSave={(v) => dispatch({ type: 'typePrice', i, c: 'kids', j: 1, v })} />}</td>
+                </>}
+              <td className="r">{legacy(p) ? '–' : m === null ? 'Set a price' : pc(m)}</td>
+            </tr>) })}
+        </Table>
+      </div>
+
+      <div className="card"><h2>Add a product</h2>
+        <div className="fm">
+          <label>Name<input value={np.n} onChange={setN('n')} placeholder="e.g. Banner - Roll-up" /></label>
+          <label>Method<select value={np.mode} onChange={setN('mode')}><option value="fixed">Fixed metres per piece (hat, banner)</option><option value="sized">Sized by pattern height (dress, track suit)</option></select></label>
+          {np.mode === 'fixed'
+            ? <label>Metres per piece<input type="number" step="any" min="0" value={np.metres} onChange={setN('metres')} placeholder="e.g. 0.1 or 2" /></label>
+            : <label>Fabric multiplier<input type="number" step="any" min="0" value={np.m} onChange={setN('m')} placeholder="e.g. 1.5" /></label>}
+          <label>Material, per metre<input type="number" step="any" min="0" value={np.fabric} onChange={setN('fabric')} placeholder={'Default ' + tidy(S.R.fabric)} /></label>
+          <label>Printing, per metre<input type="number" step="any" min="0" value={np.print} onChange={setN('print')} placeholder={'Default ' + tidy(S.R.print)} /></label>
+          <label>Pressing, per metre<input type="number" step="any" min="0" value={np.press} onChange={setN('press')} placeholder={'Default ' + tidy(S.R.press)} /></label>
+          <label>Making fee, per piece<input type="number" step="any" min="0" value={np.sew} onChange={setN('sew')} placeholder={'Default ' + tidy(S.R.sew)} /></label>
+          <label>{np.mode === 'fixed' ? 'Selling price' : 'Adult price'}, under {S.thr}<input type="number" step="any" min="0" value={np.a0} onChange={setN('a0')} /></label>
+          <label>{np.mode === 'fixed' ? 'Selling price' : 'Adult price'}, {S.thr}+ (optional)<input type="number" step="any" min="0" value={np.a1} onChange={setN('a1')} /></label>
+          {np.mode === 'sized' && <label>Kids price, under {S.thr}<input type="number" step="any" min="0" value={np.k0} onChange={setN('k0')} /></label>}
+          {np.mode === 'sized' && <label>Kids price, {S.thr}+ (optional)<input type="number" step="any" min="0" value={np.k1} onChange={setN('k1')} /></label>}
+          <button className="btn" disabled={!canEdit} onClick={addProduct}>Add product</button>
+        </div>
+        {npErr && <div className="note w" role="alert">{npErr}</div>}
+        <p className="sub">Prices and rates can be changed later in the tables above, and any price can still be typed per order line on the New order page.</p>
+      </div>
+
       <div className="card"><h2>Sizes</h2>
         <Table head={['Size', 'Category', 'Pattern height, mm', 'Metres per shirt', 'Metres with tolerance', 'Cost per shirt']} right={2}>
           {S.sizes.map((x, i) => (
