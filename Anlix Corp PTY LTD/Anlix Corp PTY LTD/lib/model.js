@@ -12,13 +12,52 @@ const num = (v) => v !== null && v !== undefined && v !== '' && Number.isFinite(
 // Long sleeves use more fabric, so set their multiplier on the Costing page once you have measured it.
 export const TYPES0 = ['Round neck', 'V-neck', 'Golf - round neck', 'Golf - V-neck', 'Long sleeve']
 
+// Product catalogue. Every entry has a name (n) and a method (mode):
+//   'sized' = fabric per piece follows the size's pattern height x a multiplier (m), e.g. dress, track suit.
+//   'fixed' = fabric per piece is a set number of metres (metres), e.g. bucket hat, banners.
+// Any of fabric / print / press (per metre) and sew (making fee per piece) can be set per product; blank means "use the Cost rates".
+// price = { adult: [under bulk threshold, bulk], kids: [under, bulk] } and is set by hand. Fixed products use the adult pair only.
+// Older shirt types have no mode: they keep using the shirt price tiers and the Cost rates.
+export const CATALOG_V = 2
+export const NEW_PRODUCTS = () => [
+  { n: 'Bucket hat', mode: 'fixed', m: 1, metres: 0.1, fabric: 35 },   // 1 m of fabric makes 10 hats; fabric P30 to P35 per metre
+  { n: 'Dress', mode: 'sized', m: 1.54862 },                           // medium dress with sleeves and collar = 1207.92 mm (780 mm medium shirt x 1.54862)
+  { n: 'Track suit', mode: 'sized', m: 1 },                            // set the multiplier once measured
+  { n: 'Banner - PVC', mode: 'fixed', m: 1 },
+  { n: 'Banner - Pull-up', mode: 'fixed', m: 1 },
+  { n: 'Banner - Mesh', mode: 'fixed', m: 1 },
+  { n: 'Banner - Fabric', mode: 'fixed', m: 1 },
+  { n: 'Banner - Teardrop flag', mode: 'fixed', m: 1 },
+]
+export const ONE = 'One size' // stand-in size for fixed products, which are not sized
+export const isFixed = (p) => !!p && p.mode === 'fixed'
+export const prodOf = (S, t) => (S.types || []).find((y) => y.n === t)
+const RATE_KEYS = ['fabric', 'print', 'press', 'sew']
+// Rates a product sets for itself (numbers only).
+export const typeRates = (S, t) => { const p = prodOf(S, t), o = {}; if (p) RATE_KEYS.forEach((k) => { if (num(p[k]) && +p[k] >= 0) o[k] = +p[k] }); return o }
+// Default rates for a line of this product: product's own where set, else the Cost rates.
+export const baseRates = (S, t) => ({ ...S.R, ...typeRates(S, t) })
+// What still needs to be filled in before this product can be sold at a sensible price.
+export const typeGaps = (S, p) => {
+  const g = []
+  if (!p || !p.mode) return g
+  if (isFixed(p) && !(num(p.metres) && +p.metres > 0)) g.push('metres per piece')
+  if (!isFixed(p) && !num(p.m)) g.push('fabric multiplier')
+  if (!(p.price && p.price.adult && (num(p.price.adult[0]) || num(p.price.adult[1])))) g.push('selling price')
+  return g
+}
+// Words used for the item on invoices and quotations.
+export const lineNoun = (S, l) => { const p = prodOf(S, l.type); return !l.type ? 'T-shirts' : p && p.mode ? p.n : l.type + ' T-shirts' }
+export const lineLabel = (l) => [l.type, l.s === ONE ? '' : l.s, l.colour].filter(Boolean).join(' ')
+
 export const initial = () => ({
   user: 'Staff 1',
   R: { print: 50, fabric: 18, press: 10, sew: 25 }, // print, fabric, press per metre; sew per shirt
   T: { adult: [200, 180], kids: [150, 130] },
   thr: 10, dep: 50, seq: 0, over: [], orders: [], audit: [], finance: [],
   tol: 5, // allowed difference (%) between theoretical and actual printed metres
-  types: TYPES0.map((n) => ({ n, m: 1 })),
+  types: [...TYPES0.map((n) => ({ n, m: 1 })), ...NEW_PRODUCTS()],
+  catalogV: CATALOG_V,
   sizes: [
     ...[['2–4 yrs', 490], ['5–6 yrs', 550], ['7–8 yrs', 590], ['9–10 yrs', 610], ['11–12 yrs', 640], ['13–14 yrs', 679]].map(([n, h]) => ({ n, c: 'kids', h })),
     { n: 'XS', c: 'adult', h: 724 }, { n: 'S', c: 'adult', h: 740, e: 1 }, { n: 'M', c: 'adult', h: 780, e: 1 },
@@ -27,8 +66,15 @@ export const initial = () => ({
   ],
 })
 
-export const sz = (S, n) => S.sizes.find((z) => z.n === n)
-export const price = (S, z, q) => S.T[z.c][q >= S.thr ? 1 : 0]
+export const sz = (S, n) => S.sizes.find((z) => z.n === n) || (n === ONE ? { n: ONE, c: 'adult', h: 1000 } : undefined)
+// Selling price of one piece. A product with its own price uses it (blank bulk price falls back to the standard price).
+// Older shirt types, and lines with no product, use the shirt price tiers. New products with no price set return 0 until one is entered.
+const pick = (a, t) => (!a ? null : num(a[t]) ? +a[t] : num(a[0]) ? +a[0] : num(a[1]) ? +a[1] : null)
+export const price = (S, z, q, t) => {
+  const tier = q >= S.thr ? 1 : 0, p = prodOf(S, t)
+  if (p && p.mode) { const v = pick(p.price && p.price[isFixed(p) ? 'adult' : z.c], tier); return v === null ? 0 : v }
+  return S.T[z.c][tier]
+}
 export const qty = (o) => o.lines.reduce((a, l) => a + l.q, 0)
 
 // ---------- Tolerance, garment type and per-line rates ----------
@@ -39,7 +85,10 @@ export const typeMult = (S, t) => { const x = (S.types || []).find((y) => y.n ==
 export const lineH = (S, l) => {
   const z = sz(S, l.s)
   if (!z) return 0
-  return num(l.h) && +l.h > 0 ? +l.h : z.h * typeMult(S, l.type)
+  if (num(l.h) && +l.h > 0) return +l.h
+  const p = prodOf(S, l.type)
+  if (isFixed(p)) return num(p.metres) && +p.metres > 0 ? +p.metres * 1000 : 0
+  return z.h * typeMult(S, l.type)
 }
 
 // Rates a line is costed at. New lines carry their own snapshot (l.rt) with any overrides listed in l.ov.
@@ -66,7 +115,7 @@ export const cost = (S, z) => (z.h / 1000) * (S.R.print + S.R.fabric + S.R.press
 export const costTol = (S, z) => (z.h / 1000) * (1 + tolPct(S) / 100) * (S.R.print + S.R.fabric + S.R.press) + S.R.sew
 
 export const unit = (S, l, q) => ({
-  price: num(l.unitPrice) ? +l.unitPrice : price(S, sz(S, l.s), q),
+  price: num(l.unitPrice) ? +l.unitPrice : price(S, sz(S, l.s), q, l.type),
   cost: lineCost(S, l),
 })
 
@@ -168,15 +217,16 @@ const now = () => new Date().toLocaleString('en-GB', { day: '2-digit', month: 's
 // Build a saved order line. Blank fabricRate / sewRate / unitPrice mean "use the default".
 // Rates are snapshotted on the line so later changes to the Costing page do not rewrite old orders.
 export const mkLine = (S, l, q) => {
-  const z = sz(S, l.s), rt = { ...S.R }, ov = []
+  const z = sz(S, l.s), rt = baseRates(S, l.type), ov = [], pd = prodOf(S, (l.type || '').trim())
   if (num(l.fabricRate)) { rt.fabric = Math.max(0, +l.fabricRate); ov.push('fabric') }
   if (num(l.sewRate)) { rt.sew = Math.max(0, +l.sewRate); ov.push('sew') }
   const out = {
     s: l.s, q: l.q, colour: (l.colour || '').trim(), fabric: (l.fabric || '').trim(), desc: (l.desc || '').trim(),
     type: (l.type || '').trim(), tailor: (l.tailor || '').trim(), shop: (l.shop || '').trim(),
-    rt, ov, unitPrice: num(l.unitPrice) ? Math.max(0, +l.unitPrice) : price(S, z, q),
+    rt, ov, unitPrice: num(l.unitPrice) ? Math.max(0, +l.unitPrice) : price(S, z, q, (l.type || '').trim()),
   }
   if (num(l.h) && +l.h > 0) out.h = +l.h
+  else if (isFixed(pd) && lineH(S, { s: l.s, type: out.type }) > 0) out.h = lineH(S, { s: l.s, type: out.type }) // keep the metres this piece used when the order was placed
   out.unitCost = lineCost(S, out)
   return out
 }
@@ -184,6 +234,7 @@ export const mkLine = (S, l, q) => {
 // Fabric needed and production cost for a set of order lines, grouped by colour, garment type and fabric.
 // Fabric length = pattern height x garment multiplier x quantity. Each line uses its own rates, so the total matches the order's production cost.
 // Pass the order as o to add the actual printed metres. allow = metres to buy/print including the tolerance.
+const ixOf = (S, n) => { const i = S.sizes.findIndex((z) => z.n === n); return i < 0 ? 999 : i }
 export function materialPlan(S, lines, o) {
   const groups = new Map(), tol = tolPct(S)
   const parts = { fabric: 0, print: 0, press: 0, sew: 0 }
@@ -208,7 +259,7 @@ export function materialPlan(S, lines, o) {
   const f = o ? metresFactor(S, o) : 1, actual = o && hasActual(o) ? +o.actualM : null
   const rows = [...groups.values()].map((g) => ({
     ...g,
-    sizeText: S.sizes.filter((z) => g.by[z.n]).map((z) => `${g.by[z.n]} × ${z.n}`).join(', '),
+    sizeText: Object.keys(g.by).sort((a, b) => ixOf(S, a) - ixOf(S, b)).map((n) => (n === ONE ? `${g.by[n]} pcs` : `${g.by[n]} × ${n}`)).join(', '),
     allow: g.metres * (1 + tol / 100),
     actual: actual === null ? null : g.metres * f, // actual metres are shared across groups in proportion to their theoretical metres
   })).sort((a, b) => a.colour.localeCompare(b.colour) || a.type.localeCompare(b.type) || a.fabric.localeCompare(b.fabric))
@@ -239,7 +290,16 @@ export function reduce(S, a) {
   const log = (t, o = '', u = S.user) => ({ ts: now(), u, o, t })
   const add = (...e) => ({ ...S, audit: [...e.reverse(), ...S.audit] })
   switch (a.type) {
-    case 'load': return { ...initial(), ...a.state }
+    case 'load': {
+      // Saved data from before the product catalogue existed gets the new products added once. Existing products and prices are never touched.
+      const st = { ...initial(), ...a.state }
+      if (a.state && (a.state.catalogV || 0) < CATALOG_V) {
+        const have = new Set((st.types || []).map((t) => t.n.toLowerCase()))
+        st.types = [...(st.types || []), ...NEW_PRODUCTS().filter((p) => !have.has(p.n.toLowerCase()))]
+        st.catalogV = CATALOG_V
+      }
+      return st
+    }
     case 'user': return { ...S, user: a.user }
     case 'register': {
       const n = nextSeq(S), p = String(n).padStart(4, '0'), y = TODAY.slice(0, 4)
@@ -252,7 +312,7 @@ export function reduce(S, a) {
         dt: a.d.dt, dv: +a.d.dv || 0, dr: a.d.dr, pays: [], prod: false, prodStatus: 'Awaiting production', priority: 'Normal', dueDate: a.d.dueDate || '', phone: (a.d.phone || '').trim(), stages: mkStages(), createdAt: new Date().toISOString() }
       const e = [log(`Job card ${o.jc} created by ${by}, linked to ${o.qt} and ${o.inv}`, o.jc, by)]
       const custom = lines.filter((l) => l.ov.length)
-      if (custom.length) e.push(log(`Custom rates on ${custom.length} line(s): ` + custom.map((l) => `${[l.type, l.s, l.colour].filter(Boolean).join(' ')}${l.ov.includes('fabric') ? ' fabric ' + f2(l.rt.fabric) + '/m' : ''}${l.ov.includes('sew') ? ' sewing ' + f2(l.rt.sew) : ''}`).join('; '), o.jc, by))
+      if (custom.length) e.push(log(`Custom rates on ${custom.length} line(s): ` + custom.map((l) => `${lineLabel(l)}${l.ov.includes('fabric') ? ' fabric ' + f2(l.rt.fabric) + '/m' : ''}${l.ov.includes('sew') ? ' sewing ' + f2(l.rt.sew) : ''}`).join('; '), o.jc, by))
       if (o.dv > 0) e.push(log(`Discount ${o.dt === '%' ? o.dv + '%' : f2(o.dv)} applied: ${o.dr}`, o.jc, by))
       return { ...add(...e), seq: n, orders: [...S.orders, o] }
     }
@@ -261,20 +321,21 @@ export function reduce(S, a) {
       const o = S.orders.find((x) => x.jc === a.jc)
       if (!o || o.closed || !o.lines[a.i]) return S
       const old = o.lines[a.i], p = a.patch || {}, l = { ...old, rt: { ...lineRates(S, old) }, ov: [...(old.ov || [])] }
-      const ch = [], label = [old.type, old.s, old.colour].filter(Boolean).join(' ')
+      const ch = [], label = lineLabel(old)
       const blank = (v) => v === '' || v === null || v === undefined
       const rate = (key, field, name) => {
         if (!(key in p)) return
         const raw = p[key], was = l.rt[field]
         if (blank(raw)) {
-          if (l.ov.includes(field)) { l.rt[field] = S.R[field]; l.ov = l.ov.filter((x) => x !== field); ch.push(`${name} ${f2(was)} → ${f2(S.R[field])} (default)`) }
+          const dflt = baseRates(S, l.type)[field]
+          if (l.ov.includes(field)) { l.rt[field] = dflt; l.ov = l.ov.filter((x) => x !== field); ch.push(`${name} ${f2(was)} → ${f2(dflt)} (default)`) }
         } else if (num(raw) && +raw >= 0 && +raw !== was) {
           l.rt[field] = +raw; if (!l.ov.includes(field)) l.ov.push(field); ch.push(`${name} ${f2(was)} → ${f2(+raw)}`)
         }
       }
       rate('fabricRate', 'fabric', 'fabric per metre'); rate('sewRate', 'sew', 'sewing fee')
       if ('unitPrice' in p) {
-        const was = unit(S, old, qty(o)).price, next = blank(p.unitPrice) ? price(S, sz(S, old.s), qty(o)) : num(p.unitPrice) && +p.unitPrice >= 0 ? +p.unitPrice : was
+        const was = unit(S, old, qty(o)).price, next = blank(p.unitPrice) ? price(S, sz(S, old.s), qty(o), old.type) : num(p.unitPrice) && +p.unitPrice >= 0 ? +p.unitPrice : was
         if (next !== was) { l.unitPrice = next; ch.push(`selling price ${f2(was)} → ${f2(next)}`) }
       }
       if ('h' in p) {
@@ -467,14 +528,56 @@ export function reduce(S, a) {
     case 'height': return { ...add(log(`Pattern height of ${S.sizes[a.i].n} changed to ${a.v} mm`)), sizes: S.sizes.map((z, i) => (i === a.i ? { ...z, h: a.v, e: 0 } : z)) }
     case 'addSize': return S.sizes.some((z) => z.n === a.size.n) ? S : { ...add(log(`Size ${a.size.n} added, pattern height ${a.size.h} mm`)), sizes: [...S.sizes, a.size] }
     case 'addType': {
-      const n = String(a.n || '').trim(), m = +a.m || 1
-      if (!n || !(m > 0) || (S.types || []).some((x) => x.n.toLowerCase() === n.toLowerCase())) return S
-      return { ...add(log(`Garment type ${n} added, fabric multiplier ${m}`)), types: [...(S.types || []), { n, m }] }
+      // a.p = { n, mode: 'sized' | 'fixed', m, metres, fabric, print, press, sew, price: { adult: [under, bulk], kids: [under, bulk] } }. Old shape { n, m } still works.
+      const p = a.p || { n: a.n, m: a.m }, n = String(p.n || '').trim(), fixed = p.mode === 'fixed', m = +p.m || 1, metres = +p.metres
+      if (!n || (S.types || []).some((x) => x.n.toLowerCase() === n.toLowerCase())) return S
+      if (fixed ? !(metres > 0) : !(m > 0)) return S
+      const t = p.mode ? { n, mode: fixed ? 'fixed' : 'sized', m: fixed ? 1 : m } : { n, m }
+      if (fixed) t.metres = metres
+      RATE_KEYS.forEach((k) => { if (num(p[k]) && +p[k] >= 0) t[k] = +p[k] })
+      const pr = {}
+      ;['adult', 'kids'].forEach((c) => { const x = p.price && p.price[c]; if (x && (num(x[0]) || num(x[1]))) pr[c] = [num(x[0]) ? +x[0] : '', num(x[1]) ? +x[1] : ''] })
+      if (Object.keys(pr).length) t.price = pr
+      const bits = [fixed ? `${metres} m per piece` : `fabric multiplier ${t.m}`, ...RATE_KEYS.filter((k) => k in t).map((k) => `${k === 'fabric' ? 'material' : k === 'sew' ? 'making fee' : k} ${f2(t[k])}${k === 'sew' ? ' per piece' : ' per m'}`), ...(t.price && t.price.adult ? [`price ${t.price.adult.filter((v) => v !== '').map(f2).join(' / ')}`] : [])]
+      return { ...add(log(`Product ${n} added (${fixed ? 'fixed metres' : 'sized by pattern'}): ${bits.join(', ')}`)), types: [...(S.types || []), t] }
     }
     case 'typeMult': {
       const x = (S.types || [])[a.i], v = +a.v
       if (!x || !(v > 0)) return S
       return { ...add(log(`Fabric multiplier for ${x.n} changed from ${x.m} to ${v}`)), types: S.types.map((y, i) => (i === a.i ? { ...y, m: v } : y)) }
+    }
+    case 'typeRate': {
+      // Change one setting of a product. a.k is fabric, print, press, sew or metres; '' clears it back to the default (metres cannot be cleared).
+      const x = (S.types || [])[a.i]
+      if (!x || ![...RATE_KEYS, 'metres'].includes(a.k)) return S
+      const blank = a.v === '' || a.v === null || a.v === undefined, name = { fabric: 'material per metre', print: 'printing per metre', press: 'pressing per metre', sew: 'making fee per piece', metres: 'metres per piece' }[a.k]
+      const was = num(x[a.k]) ? +x[a.k] : null, shown = (v) => (v === null ? 'default' : a.k === 'metres' ? `${v} m` : f2(v))
+      let next
+      if (blank) { if (a.k === 'metres' || was === null) return S; next = null }
+      else { const v = +a.v; if (!Number.isFinite(v) || v < 0 || (a.k === 'metres' && !(v > 0)) || v === was) return S; next = v }
+      const t = { ...x }; if (next === null) delete t[a.k]; else t[a.k] = next
+      return { ...add(log(`${x.n}: ${name} ${shown(was)} → ${shown(next)}`)), types: S.types.map((y, i) => (i === a.i ? t : y)) }
+    }
+    case 'typePrice': {
+      // Set a selling price by hand. a.c is 'adult' or 'kids', a.j is 0 (under the bulk threshold) or 1 (bulk), '' clears it.
+      const x = (S.types || [])[a.i]
+      if (!x || !['adult', 'kids'].includes(a.c) || ![0, 1].includes(a.j)) return S
+      const blank = a.v === '' || a.v === null || a.v === undefined, v = blank ? '' : +a.v
+      if (!blank && !(Number.isFinite(v) && v >= 0)) return S
+      const cur = (x.price && x.price[a.c]) || ['', ''], was = cur[a.j]
+      if (was === v) return S
+      const pair = [...cur]; pair[a.j] = v
+      const price = { ...(x.price || {}) }
+      if (pair[0] === '' && pair[1] === '') delete price[a.c]; else price[a.c] = pair
+      const t = { ...x }; if (Object.keys(price).length) t.price = price; else delete t.price
+      const label = `${a.c === 'kids' ? 'kids' : x.mode === 'fixed' ? 'standard' : 'adult'} ${a.j ? `${S.thr}+` : `under ${S.thr}`}`
+      return { ...add(log(`${x.n}: ${label} selling price ${was === '' ? 'not set' : f2(was)} → ${v === '' ? 'not set' : f2(v)}`)), types: S.types.map((y, i) => (i === a.i ? t : y)) }
+    }
+    case 'delType': {
+      // Only products no order has used can be removed, so old orders keep their meaning.
+      const x = (S.types || [])[a.i]
+      if (!x || S.orders.some((o) => o.lines.some((l) => l.type === x.n))) return S
+      return { ...add(log(`Product ${x.n} removed from the catalogue`)), types: S.types.filter((_, i) => i !== a.i) }
     }
     case 'addOver': return { ...add(log(`Overhead ${a.n} added: ${f2(a.a)} on ${a.d}`)), over: [...S.over, { n: a.n, a: a.a, d: a.d }] }
     case 'delOver': { const x = S.over[a.i]; return x ? { ...add(log(`Overhead ${x.n} (${f2(x.a)} on ${x.d}) removed`)), over: S.over.filter((_, i) => i !== a.i) } : S }
@@ -491,7 +594,7 @@ export function alerts(S) {
     else if (c.net > 0 && c.gp / c.net < 0.2) out.push(`${o.jc} has a margin of only ${pc(c.gp / c.net)}`)
     if (!o.closed) o.lines.forEach((l) => {
       const u = unit(S, l, c.q)
-      if (u.price < u.cost) out.push(`${o.jc}: ${[l.type, l.s, l.colour].filter(Boolean).join(' ')} is priced at ${f2(u.price)} but costs ${f2(u.cost)} per shirt`)
+      if (u.price < u.cost) out.push(`${o.jc}: ${lineLabel(l)} is priced at ${f2(u.price)} but costs ${f2(u.cost)} per piece`)
     })
     if (hasActual(o)) {
       const v = metreVar(S, o)
@@ -508,7 +611,7 @@ export function snapshot(S) {
   const ov = sum(S.over.filter((x) => x.d.startsWith(m)), (x) => x.a), gp = sum(ord, (o) => calc(S, o).gp)
   const ms = metreStats(S, ord), noActual = ord.filter((o) => !hasActual(o)).length
   return {
-    period: m, currency: 'BWP', rules: { bulk_threshold_shirts: S.thr, deposit_pct_for_bulk_orders: S.dep, sewing_basis: 'flat rate per shirt', rates: S.R, metre_tolerance_pct: tolPct(S), garment_fabric_multipliers: S.types },
+    period: m, currency: 'BWP', rules: { bulk_threshold_shirts: S.thr, deposit_pct_for_bulk_orders: S.dep, sewing_basis: 'flat rate per shirt', rates: S.R, metre_tolerance_pct: tolPct(S), garment_fabric_multipliers: S.types.filter((t) => !t.mode).map(({ n, m }) => ({ n, m })), product_catalogue: S.types.filter((t) => t.mode) },
     totals: { orders: ord.length, shirts: sum(ord, qty), production_cost: r2(sum(ord, (o) => calc(S, o).cs)), gross_profit: r2(gp), overheads: r2(ov), net_profit: r2(gp - ov),
       revenue_received: r2(sum(S.orders.flatMap((o) => o.pays).filter((p) => p.d.startsWith(m)), (p) => p.amt)) },
     metre_variance: { orders_with_actual: ms.n, theoretical_m: r2(ms.theo), actual_m: r2(ms.act), variance_pct: r2(ms.pct), orders_outside_tolerance: ms.outside, extra_cost: r2(ms.cost), tolerance_that_would_cover_80pct_of_orders: ms.suggested },
