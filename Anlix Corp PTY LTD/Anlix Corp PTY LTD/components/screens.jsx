@@ -431,7 +431,7 @@ function Production({ o, c }) {
 }
 
 export function Job() {
-  const { jc } = useParams(), { S, dispatch } = useApp(), [p, setP] = useState({ amt: '', by: '', ent: '', d: TODAY }), [err, setErr] = useState('')
+  const { jc } = useParams(), { S, dispatch, superAdmin } = useApp(), router = useRouter(), [p, setP] = useState({ amt: '', by: '', ent: '', d: TODAY }), [err, setErr] = useState(''), [del, setDel] = useState({ open: false, reason: '', typed: '' })
   const o = S.orders.find((x) => x.jc === decodeURIComponent(jc))
   if (!o) return (<><Head title="Job card not found" /><Link href="/orders">Back to orders</Link></>)
   const c = calc(S, o), pr = progress(o)
@@ -440,6 +440,8 @@ export function Job() {
     if (+p.amt > c.bal + 0.005) return setErr(`The amount is more than the remaining balance of ${f2(c.bal)}.`)
     setErr(''); dispatch({ type: 'pay', jc: o.jc, amt: +p.amt, by: p.by || o.placed, ent: p.ent || o.ent, d: p.d }); setP({ ...p, amt: '' })
   }
+  const canDelete = superAdmin && del.reason.trim().length >= 3 && del.typed.trim() === o.jc
+  const remove = () => { if (!canDelete) return; dispatch({ type: 'delOrder', jc: o.jc, reason: del.reason }); router.push('/orders') }
   return (
     <>
       <div className="top"><div><h1>Job card {o.jc}</h1><div className="chips" style={{ marginTop: 8 }}><span className="tag b">{o.qt}</span><span className="tag b">{o.inv}</span><Tag o={o} />{overdue(o) && <span className="tag a">Overdue</span>}</div></div>
@@ -482,6 +484,21 @@ export function Job() {
               <button className="btn" disabled={!c.ok || o.prod} onClick={() => dispatch({ type: 'produce', jc: o.jc })}>{o.prod ? 'In production' : 'Move to production'}</button></p></div>
           <div className="card"><h2>Audit trail</h2>
             <div className="log">{S.audit.filter((a) => a.o === o.jc).reverse().map((a, i) => <div key={i}>{a.t}<span>{a.ts} · {a.u}</span></div>)}</div></div>
+          {superAdmin && (
+            <div className="card"><h2>Delete job card</h2>
+              <p className="sub">Only a super admin sees this. Deleting removes {o.jc}, its quotation and invoice, {o.pays.length} recorded payment(s) ({f2(c.paid)}) and any rework cost entries. The job number is never reused, and the deletion is written to the audit log.</p>
+              {!del.open
+                ? <button className="btn o" onClick={() => setDel({ ...del, open: true })}>Delete this job card</button>
+                : <>
+                  <div className="note w">This cannot be undone. {c.paid > 0 ? `${f2(c.paid)} has been paid on this job. ` : ''}{o.closed ? 'This job is already closed. ' : o.prod ? 'This job is in production. ' : ''}Consider downloading a backup from the Data and backups page first.</div>
+                  <div className="fm">
+                    <label>Reason for deleting<input value={del.reason} onChange={(e) => setDel({ ...del, reason: e.target.value })} placeholder="e.g. Duplicate order, test entry" /></label>
+                    <label>Type {o.jc} to confirm<input value={del.typed} onChange={(e) => setDel({ ...del, typed: e.target.value })} placeholder={o.jc} autoComplete="off" /></label>
+                  </div>
+                  <p><button className="btn" disabled={!canDelete} onClick={remove}>Delete permanently</button>{' '}<button className="btn o" onClick={() => setDel({ open: false, reason: '', typed: '' })}>Cancel</button></p>
+                </>}
+            </div>
+          )}
         </div>
       </div>
     </>
