@@ -3,7 +3,7 @@ import { Fragment, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import { useApp } from './Store'
-import { TODAY, calc, unit, phase } from '@/lib/model'
+import { TODAY, ONE, calc, unit, phase, lineNoun } from '@/lib/model'
 
 // Payment details printed on every invoice and quotation
 export const PAYMENT = ['MyZaka: 76675006', 'Smega: 73397584', 'Account name (MyZaka and Smega): Andrew Kale', 'Or E-wallet: 76 675 006']
@@ -71,20 +71,20 @@ const CSS = `
  .inv-sheet{box-shadow:none;transform:none!important;width:210mm;min-height:297mm;position:relative}
 }`
 
-// One line per size and colour: quantity only, no player names or numbers
+// One line per item, size and colour: quantity only, no player names or numbers
 function groupLines(S, o, c) {
   const ix = (n) => { const i = S.sizes.findIndex((z) => z.n === n); return i < 0 ? 999 : i }
   const map = new Map()
   o.lines.forEach((l) => {
     const u = unit(S, l, c.q), col = String(l.colour || '').trim()
-    const key = [col.toLowerCase(), l.s, u.price].join('|')
-    const g = map.get(key) || { col, s: l.s, p: u.price, q: 0 }
+    const noun = lineNoun(S, l), key = [col.toLowerCase(), noun, l.s, u.price].join('|')
+    const g = map.get(key) || { col, noun, s: l.s === ONE ? '' : l.s, p: u.price, q: 0 }
     g.q += +l.q || 0
     map.set(key, g)
   })
   return [...map.values()]
     .sort((a, b) => ix(a.s) - ix(b.s) || a.col.localeCompare(b.col))
-    .map((g) => ({ d: [g.col, 'T-shirts', g.s ? `(${g.s})` : ''].filter(Boolean).join(' '), q: g.q, p: g.p, a: g.q * g.p }))
+    .map((g) => ({ d: [g.col, g.noun, g.s ? `(${g.s})` : ''].filter(Boolean).join(' '), q: g.q, p: g.p, a: g.q * g.p }))
 }
 
 // The one template used by both the invoice and the quotation
