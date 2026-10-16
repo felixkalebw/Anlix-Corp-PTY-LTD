@@ -1,14 +1,19 @@
 'use client'
-import { createContext, useContext, useEffect, useReducer, useRef, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useReducer, useRef, useState } from 'react'
 import { initial, reduce } from '@/lib/model'
 import { supabase } from '@/lib/supabase'
+import { useAuth } from './AuthProvider'
 
 const Ctx = createContext(null)
 export const useApp = () => useContext(Ctx)
 const KEY = 'anlix-tracker-next'
 
 export function Provider({ children }) {
-  const [S, dispatch] = useReducer(reduce, null, initial)
+  const [S, rawDispatch] = useReducer(reduce, null, initial)
+  const auth = useAuth()
+  const superAdmin = !!auth && auth.role === 'super_admin'
+  // Deleting a job card is for the super admin only. Anyone else's delete request is dropped here.
+  const dispatch = useCallback((a) => { if (a && a.type === 'delOrder' && !superAdmin) return; rawDispatch(a && a.type === 'delOrder' ? { ...a, by: (auth.user && auth.user.email) || a.by } : a) }, [superAdmin, auth])
   const [ready, setReady] = useState(false)
   const [session, setSession] = useState(null)
   const [role, setRole] = useState(supabase ? null : 'admin')
@@ -51,5 +56,5 @@ export function Provider({ children }) {
     }, 1500)
   }, [S])
 
-  return <Ctx.Provider value={{ S, dispatch, ready, session, sync, role, canEdit: role === 'admin', cloud: !!supabase }}>{children}</Ctx.Provider>
+  return <Ctx.Provider value={{ S, dispatch, ready, session, sync, role, canEdit: role === 'admin', superAdmin, cloud: !!supabase }}>{children}</Ctx.Provider>
 }
