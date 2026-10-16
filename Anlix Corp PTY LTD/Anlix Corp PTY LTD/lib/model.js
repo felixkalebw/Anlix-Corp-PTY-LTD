@@ -579,6 +579,15 @@ export function reduce(S, a) {
       if (!x || S.orders.some((o) => o.lines.some((l) => l.type === x.n))) return S
       return { ...add(log(`Product ${x.n} removed from the catalogue`)), types: S.types.filter((_, i) => i !== a.i) }
     }
+    case 'delOrder': {
+      // Permanently removes a job card, with its linked quotation, invoice, payments and rework cost entries.
+      // Only a super admin can send this (the Store blocks it for everyone else). Job numbers are never reused because seq is not rolled back.
+      const o = S.orders.find((x) => x.jc === a.jc)
+      if (!o) return S
+      const c = calc(S, o), fin = (S.finance || []).filter((x) => x.ref === o.jc), why = String(a.reason || '').trim() || 'no reason given', by = a.by || S.user
+      const e = log(`Job card ${o.jc} deleted by ${by}: ${why}. Removed with it: ${o.qt}, ${o.inv}, ${o.pays.length} payment(s) totalling ${f2(c.paid)}, ${fin.length} cost entr${fin.length === 1 ? 'y' : 'ies'}. It was for ${o.ent || o.placed || 'unknown customer'}, ${c.q} item(s), net total ${f2(c.net)}${o.closed ? ', already closed' : o.prod ? ', in production' : ''}`, o.jc, by)
+      return { ...add(e), orders: S.orders.filter((x) => x.jc !== o.jc), finance: (S.finance || []).filter((x) => x.ref !== o.jc) }
+    }
     case 'addOver': return { ...add(log(`Overhead ${a.n} added: ${f2(a.a)} on ${a.d}`)), over: [...S.over, { n: a.n, a: a.a, d: a.d }] }
     case 'delOver': { const x = S.over[a.i]; return x ? { ...add(log(`Overhead ${x.n} (${f2(x.a)} on ${x.d}) removed`)), over: S.over.filter((_, i) => i !== a.i) } : S }
     default: return S
