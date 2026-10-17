@@ -1,5 +1,5 @@
 'use client'
-import { useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useParams, useRouter } from 'next/navigation'
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, CartesianGrid, PieChart, Pie, Cell, LabelList, ComposedChart, Line } from 'recharts'
@@ -83,94 +83,217 @@ function weeksOf(m) {
 }
 const kfmt = (v) => 'P' + (Math.abs(v) >= 1000 ? Math.round(v / 100) / 10 + 'k' : Math.round(v))
 
+// ---- One-screen dashboard: every figure that drives a decision fits in the window, no scrolling ----
+const pctD = (a, b) => (b ? ((a - b) / Math.abs(b)) * 100 : null)
+const shiftDay = (d, n) => isoD(new Date(new Date(d + 'T00:00:00Z').getTime() + n * 864e5))
+const prevMonth = (m) => new Date(Date.UTC(+m.slice(0, 4), +m.slice(5, 7) - 2, 1)).toISOString().slice(0, 7)
+const short = (s, n) => { const t = String(s || '').trim(); return t.length > n ? t.slice(0, n - 1) + '…' : t }
+// Keep the biggest n rows and fold the rest into "Other" so a legend never grows taller than its tile
+const topN = (rows, n) => { const s = [...rows].sort((a, b) => b.v - a.v); return s.length <= n ? s : [...s.slice(0, n - 1), { k: 'Other', v: sum(s.slice(n - 1), (x) => x.v) }] }
+
+const YT = ({ x, y, payload, w = 92, size = 12 }) => <text x={x - 4} y={y} dy={4} textAnchor="end" fill="var(--ink)" fontSize={size}>{short(payload.value, Math.floor((w - 6) / (size * 0.74)))}</text>
+const jcTip = (l, p) => (p && p[0] && p[0].payload.jc ? p[0].payload.jc + ' · ' + l : l)
+const Delta = ({ cur, prev, up = true, vs = 'before' }) => {
+  const d = pctD(cur, prev)
+  if (d == null || !Number.isFinite(d)) return <span className="dk-d">no earlier figure</span>
+  if (Math.abs(d) < 0.5) return <span className="dk-d">level with {vs}</span>
+  const good = d > 0 === up
+  return <span className={'dk-d ' + (good ? 'gd' : 'bd')}>{d > 0 ? '▲' : '▼'} {Math.abs(d) >= 1000 ? '999+' : Math.abs(d).toFixed(0)}% vs {vs}</span>
+}
+const Kt = ({ title, value, sub, color, dark, cur, prev, up, vs }) => (
+  <section className="dk" style={{ background: color, color: dark ? '#1A1A1A' : '#fff' }}>
+    <div className="dk-t">{title}</div><div className="dk-v">{value}</div>
+    <div className="dk-s">{prev === undefined ? sub : <Delta cur={cur} prev={prev} up={up} vs={vs} />}</div>
+  </section>
+)
+const Pn = ({ n, title, sub, right, children }) => (
+  <section className={'dp dp-c' + n}>
+    <header><h3>{title}</h3>{right}<span className="dp-sub">{sub}</span></header>
+    <div className="dp-body">{children}</div>
+  </section>
+)
+const Nada = ({ t }) => <div className="dp-none">{t}</div>
+const Leg = ({ rows, offset = 0 }) => (
+  <div className="dp-leg">{rows.map((r, i) => <div key={r.k}><i style={{ background: RAINBOW[(i + offset) % RAINBOW.length] }} /><span>{r.k}</span><b>{kfmt(r.v)}</b></div>)}</div>
+)
+const Donut = ({ rows, offset = 0, total, label }) => {
+  const t = topN(rows, 4)
+  return (
+    <div className="dp-donut">
+      <div className="dp-dc">
+        <ResponsiveContainer width="100%" height="100%"><PieChart>
+          <Pie data={t} dataKey="v" nameKey="k" innerRadius="64%" outerRadius="100%" paddingAngle={2} stroke="none" isAnimationActive={false}>
+            {t.map((x, i) => <Cell key={x.k} fill={RAINBOW[(i + offset) % RAINBOW.length]} />)}</Pie>
+          <Tooltip {...TT} formatter={(v) => f2(v)} /></PieChart></ResponsiveContainer>
+        <div className="dp-mid"><b>{total}</b><span>{label}</span></div>
+      </div>
+      <Leg rows={t} offset={offset} />
+    </div>
+  )
+}
+
 export function Dashboard() {
   const { S } = useApp()
-  const [m, setM] = useState(TODAY.slice(0, 7)), [wk, setWk] = useState(0)
-  const W = weeksOf(m), wi = wk > W.length ? 0 : wk
-  const r0 = wi ? W[wi - 1].s : W[0].s, r1 = wi ? W[wi - 1].e : W[W.length - 1].e
-  const inR = (d, a = r0, b = r1) => d >= a && d <= b
-  const pays = S.orders.flatMap((o) => o.pays.map((p) => ({ ...p, jc: o.jc })))
-  const months = [...new Set([TODAY.slice(0, 7), m, ...S.orders.map((o) => o.date.slice(0, 7)), ...pays.map((p) => p.d.slice(0, 7)), ...S.over.map((x) => x.d.slice(0, 7))])].sort().reverse()
+  const [m, setM] = useState(TODAY.slice(0, 7)), [wk, setWk] = useState(0), [tv, setTv] = useState(null)
+  const D = useMemo(() => {
+    const W = weeksOf(m), wi = wk > W.length ? 0 : wk
+    const r0 = wi ? W[wi - 1].s : W[0].s, r1 = wi ? W[wi - 1].e : W[W.length - 1].e
+    const inR = (d, a = r0, b = r1) => d >= a && d <= b
+    const cm = new Map(S.orders.map((o) => [o, calc(S, o)])), C = (o) => cm.get(o)
+    const pays = S.orders.flatMap((o) => o.pays.map((p) => ({ ...p, jc: o.jc })))
+    const months = [...new Set([TODAY.slice(0, 7), m, ...S.orders.map((o) => o.date.slice(0, 7)), ...pays.map((p) => p.d.slice(0, 7)), ...S.over.map((x) => x.d.slice(0, 7))])].sort().reverse()
 
-  // This period only: revenue by payment date, orders by the date they were received, overheads by their own date
-  const ord = S.orders.filter((o) => inR(o.date)), pys = pays.filter((p) => inR(p.d)), ovs = S.over.filter((x) => inR(x.d))
-  const rev = sum(pys, (p) => p.amt), cs = sum(ord, (o) => calc(S, o).cs), gp = sum(ord, (o) => calc(S, o).gp), ov = sum(ovs, (x) => x.a), net = gp - ov
-  const n = ord.length, shirts = sum(ord, qty)
+    // One function gives every headline figure for any date range, so "this period" and "before" are measured the same way
+    const per = (a, b) => {
+      const ord = S.orders.filter((o) => inR(o.date, a, b)), pys = pays.filter((p) => inR(p.d, a, b)), ovs = S.over.filter((x) => inR(x.d, a, b))
+      const rev = sum(pys, (p) => p.amt), cs = sum(ord, (o) => C(o).cs), gp = sum(ord, (o) => C(o).gp), ov = sum(ovs, (x) => x.a)
+      return { ord, pys, ovs, rev, cs, gp, ov, net: gp - ov, n: ord.length, shirts: sum(ord, qty) }
+    }
+    const cur = per(r0, r1)
+    let prev
+    if (wi) { const len = Math.round((new Date(r1) - new Date(r0)) / 864e5) + 1, p1 = shiftDay(r0, -1); prev = per(shiftDay(p1, -(len - 1)), p1) }
+    else { const pw = weeksOf(prevMonth(m)); prev = per(pw[0].s, pw[pw.length - 1].e) }
 
-  const wkData = W.map((w, i) => {
-    const a = S.orders.filter((o) => inR(o.date, w.s, w.e)), g = sum(a, (o) => calc(S, o).gp), o2 = sum(S.over.filter((x) => inR(x.d, w.s, w.e)), (x) => x.a)
-    return { n: 'Wk ' + (i + 1), Revenue: sum(pays.filter((p) => inR(p.d, w.s, w.e)), (p) => p.amt), 'Production cost': sum(a, (o) => calc(S, o).cs), 'Gross profit': g, 'Net profit': g - o2 }
-  })
-  const days = []
-  for (let t = new Date(r0 + 'T00:00:00Z'); isoD(t) <= r1; t = new Date(t.getTime() + 864e5)) days.push(isoD(t))
-  const dayData = days.map((d) => ({ n: String(+d.slice(8)), Revenue: sum(pys.filter((p) => p.d === d), (p) => p.amt), 'Production cost': sum(ord.filter((o) => o.date === d), (o) => calc(S, o).cs), Overheads: sum(ovs.filter((x) => x.d === d), (x) => x.a) }))
-  const po = ord.map((o) => { const c = calc(S, o); return { n: o.jc.slice(-4) + ' ' + String(o.ent).slice(0, 12), 'Production cost': +c.cs.toFixed(2), 'Overhead share': shirts ? +((ov * c.q) / shirts).toFixed(2) : 0 } })
-  const comp = costParts(S, ord).comp, split = COST_N.map((k, i) => ({ k, v: comp[i] })).filter((x) => x.v > 0)
-  const en = {}; pys.forEach((p) => { const k = p.ent || '–'; en[k] = (en[k] || 0) + p.amt })
-  const payers = Object.entries(en).map(([k, v]) => ({ k, v }))
-  const mo = S.orders.filter((o) => inR(o.date, W[0].s, W[W.length - 1].e)), sold = sum(mo, qty), tgp = sum(mo, (o) => calc(S, o).gp)
-  const ovM = sum(S.over.filter((x) => inR(x.d, W[0].s, W[W.length - 1].e)), (x) => x.a)
-  const avg = sold ? tgp / sold : sum(S.sizes, (z) => S.T[z.c][1] - cost(S, z)) / S.sizes.length, be = avg > 0 && ovM > 0 ? Math.ceil(ovM / avg) : 0
-  const sizeData = S.sizes.map((z) => { const c = cost(S, z), p = S.T[z.c][1]; return { n: z.n, Cost: +c.toFixed(2), Margin: +(((p - c) / p) * 100).toFixed(1) } })
-  const owing = S.orders.map((o) => ({ n: o.jc.slice(-4) + ' ' + String(o.ent).slice(0, 12), Balance: +calc(S, o).bal.toFixed(2) })).filter((x) => x.Balance > 0.005)
-  const empty = (t) => <p className="sub">{t}</p>
-  const money = (v) => f2(v)
+    const wkData = W.map((w, i) => {
+      const a = S.orders.filter((o) => inR(o.date, w.s, w.e)), g = sum(a, (o) => C(o).gp), o2 = sum(S.over.filter((x) => inR(x.d, w.s, w.e)), (x) => x.a)
+      return { n: 'Wk ' + (i + 1), Revenue: sum(pays.filter((p) => inR(p.d, w.s, w.e)), (p) => p.amt), 'Production cost': sum(a, (o) => C(o).cs), 'Gross profit': g, 'Net profit': g - o2 }
+    })
+    const days = []
+    for (let t = new Date(r0 + 'T00:00:00Z'); isoD(t) <= r1; t = new Date(t.getTime() + 864e5)) days.push(isoD(t))
+    const dayData = days.map((d) => ({ n: String(+d.slice(8)), Revenue: sum(cur.pys.filter((p) => p.d === d), (p) => p.amt), 'Production cost': sum(cur.ord.filter((o) => o.date === d), (o) => C(o).cs), Overheads: sum(cur.ovs.filter((x) => x.d === d), (x) => x.a) }))
+
+    const spend = cur.ord.map((o) => { const c = C(o); return { jc: o.jc, n: short(o.ent || o.placed, 16), 'Production cost': +c.cs.toFixed(2), 'Overhead share': cur.shirts ? +((cur.ov * c.q) / cur.shirts).toFixed(2) : 0 } })
+      .sort((a, b) => b['Production cost'] + b['Overhead share'] - a['Production cost'] - a['Overhead share'])
+    const comp = costParts(S, cur.ord).comp, split = COST_N.map((k, i) => ({ k, v: comp[i] })).filter((x) => x.v > 0)
+    const en = {}; cur.pys.forEach((p) => { const k = p.ent || '–'; en[k] = (en[k] || 0) + p.amt })
+    const payers = Object.entries(en).map(([k, v]) => ({ k, v }))
+
+    // Break-even always looks at the whole month, because overheads are a monthly cost
+    const mo = S.orders.filter((o) => inR(o.date, W[0].s, W[W.length - 1].e)), sold = sum(mo, qty), tgp = sum(mo, (o) => C(o).gp)
+    const ovM = sum(S.over.filter((x) => inR(x.d, W[0].s, W[W.length - 1].e)), (x) => x.a)
+    const avg = sold ? tgp / sold : sum(S.sizes, (z) => S.T[z.c][1] - cost(S, z)) / S.sizes.length, be = avg > 0 && ovM > 0 ? Math.ceil(ovM / avg) : 0
+
+    // Money owed across all open orders, biggest first. Overdue ones are marked so they stand out
+    const owingAll = S.orders.map((o) => ({ jc: o.jc, n: short(o.ent || o.placed, 16), Balance: +C(o).bal.toFixed(2), late: overdue(o) })).filter((x) => x.Balance > 0.005).sort((a, b) => b.Balance - a.Balance)
+    const owed = sum(owingAll, (x) => x.Balance), owedLate = sum(owingAll.filter((x) => x.late), (x) => x.Balance)
+
+    // Which products make money this period (before discounts)
+    const pr = {}
+    cur.ord.forEach((o) => { const q = C(o).q; o.lines.forEach((l) => { const u = unit(S, l, q), k = l.type || 'T-shirt'; pr[k] = pr[k] || { rev: 0, cost: 0 }; pr[k].rev += l.q * u.price; pr[k].cost += l.q * u.cost }) })
+    const prod = Object.entries(pr).map(([k, v]) => ({ n: short(k, 14), Profit: +(v.rev - v.cost).toFixed(2), Margin: v.rev ? (v.rev - v.cost) / v.rev * 100 : 0 })).sort((a, b) => b.Profit - a.Profit)
+
+    // What needs a decision today
+    const cnt = { over: 0, wait: 0, art: 0, hold: 0, prod: 0, ready: 0 }
+    S.orders.forEach((o) => { const p = phase(S, o); if (overdue(o)) cnt.over++; if (p.startsWith('Awaiting')) cnt.wait++; else if (p === 'Artwork pending') cnt.art++; else if (p === 'Quality hold') cnt.hold++; else if (p === 'In production') cnt.prod++; else if (p === 'Ready for collection') cnt.ready++ })
+    return { W, wi, r0, r1, months, cur, prev, wkData, dayData, spend, split, payers, sold, be, ovM, avg, owingAll, owed, owedLate, prod, cnt, alerts: alerts(S).length }
+  }, [S, m, wk])
+
+  const { W, wi, months, cur, prev, cnt } = D
+  const view = tv || (wi ? 'd' : 'w'), money = (v) => f2(v), vs = wi ? 'last period' : 'last month'
+  const pick = (fn) => { fn(); setTv(null) }
+  const attention = [
+    ['Overdue orders', cnt.over, 'bad', '/orders?f=Overdue'], ['Awaiting deposit or payment', cnt.wait, 'warn', '/orders?f=' + encodeURIComponent('Awaiting deposit or payment')],
+    ['Quality hold', cnt.hold, 'bad', '/orders?f=' + encodeURIComponent('Quality hold')], ['Artwork pending', cnt.art, 'warn', '/orders?f=' + encodeURIComponent('Artwork pending')],
+    ['In production', cnt.prod, 'info', '/orders?f=' + encodeURIComponent('In production')], ['Ready for collection', cnt.ready, 'good', '/orders?f=' + encodeURIComponent('Ready for collection')],
+    ['Pricing and metre alerts', D.alerts, 'warn', '/ai'],
+  ]
 
   return (
-    <>
-      <Head title="Dashboard" sub="Weekly, daily and per-order figures" />
-      <div className="chips">
-        <select aria-label="Month" value={m} onChange={(e) => { setM(e.target.value); setWk(0) }} style={{ width: 'auto', marginTop: 0 }}>
-          {months.map((x) => <option key={x} value={x}>{new Date(x + '-01T00:00').toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })}</option>)}
-        </select>
-        {['Whole month', ...W.map((w, i) => `Wk ${i + 1} · ${w.a}–${w.b}`)].map((x, i) => <button key={x} className={'chip' + (wi === i ? ' on' : '')} onClick={() => setWk(i)}>{x}</button>)}
+    <div className="dash">
+      <div className="dash-top">
+        <h1>Dashboard</h1>
+        <div className="chips">
+          <select aria-label="Month" value={m} onChange={(e) => pick(() => { setM(e.target.value); setWk(0) })} style={{ width: 'auto', marginTop: 0 }}>
+            {months.map((x) => <option key={x} value={x}>{new Date(x + '-01T00:00').toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })}</option>)}
+          </select>
+          {['Whole month', ...W.map((w, i) => `Wk ${i + 1} · ${w.a}–${w.b}`)].map((x, i) => <button key={x} className={'chip' + (wi === i ? ' on' : '')} onClick={() => pick(() => setWk(i))}>{x}</button>)}
+        </div>
       </div>
-      <div className="pb-tiles">
-        <Kc title="Revenue received" sub="Payments dated in this period" value={money(rev)} color={COL.rev} />
-        <Kc title="Production cost" sub={`${n} orders received`} value={money(cs)} color="#D4460C" />
-        <Kc title="Gross profit" sub="Same orders" value={money(gp)} color="#1B8A55" />
-        <Kc title="Overheads" sub="Dated in this period" value={money(ov)} color={COL.oh} dark />
-        <Kc title="Net profit" sub="After overheads" value={money(net)} color={net < 0 ? '#C62828' : '#6A3FE0'} />
-        <Kc title="Spend per order" sub={`${shirts} shirts`} value={money(n ? (cs + ov) / n : 0)} color="#C4006C" />
 
-        <Tile n={12} title="Week by week" sub="Revenue, production cost, gross profit and net profit for each week of the month">
-          <ResponsiveContainer width="100%" height={300}><BarChart data={wkData} margin={{ top: 10 }}><CartesianGrid vertical={false} stroke="var(--line)" />
-            <XAxis dataKey="n" {...AX} /><YAxis {...AX} width={52} tickFormatter={kfmt} /><Tooltip {...TT} formatter={money} /><Legend iconSize={10} />
-            <Bar dataKey="Revenue" fill={COL.rev} radius={[4, 4, 0, 0]} /><Bar dataKey="Production cost" fill={COL.cost} radius={[4, 4, 0, 0]} />
-            <Bar dataKey="Gross profit" fill={COL.gp} radius={[4, 4, 0, 0]} /><Bar dataKey="Net profit" fill={COL.net} radius={[4, 4, 0, 0]} /></BarChart></ResponsiveContainer></Tile>
-        <Tile n={12} title="Day by day" sub="Inside the selected period">
-          <ResponsiveContainer width="100%" height={260}><BarChart data={dayData} margin={{ top: 10 }}><CartesianGrid vertical={false} stroke="var(--line)" />
-            <XAxis dataKey="n" {...AX} interval={0} /><YAxis {...AX} width={52} tickFormatter={kfmt} /><Tooltip {...TT} formatter={money} labelFormatter={(l) => 'Day ' + l} /><Legend iconSize={10} />
-            <Bar dataKey="Revenue" fill={COL.rev} radius={[3, 3, 0, 0]} /><Bar dataKey="Production cost" fill={COL.cost} radius={[3, 3, 0, 0]} /><Bar dataKey="Overheads" fill={COL.oh} radius={[3, 3, 0, 0]} /></BarChart></ResponsiveContainer></Tile>
-
-        <Tile n={5} title="Spend per order" sub="Production cost plus the order's share of overheads">
-          {po.length ? <ResponsiveContainer width="100%" height={Math.max(220, po.length * 38 + 60)}><BarChart data={po} layout="vertical" margin={{ right: 16 }}>
-            <XAxis type="number" {...AX} tickFormatter={kfmt} /><YAxis type="category" dataKey="n" {...AX} width={110} interval={0} /><Tooltip {...TT} formatter={money} /><Legend iconSize={10} />
-            <Bar dataKey="Production cost" stackId="a" fill={COL.cost} /><Bar dataKey="Overhead share" stackId="a" fill={COL.oh} /></BarChart></ResponsiveContainer> : empty('No orders received in this period.')}</Tile>
-        <Tile n={3} title="Where production cost goes" sub="This period">
-          {split.length ? <ResponsiveContainer width="100%" height={250}><PieChart><Pie data={split} dataKey="v" nameKey="k" innerRadius={48} outerRadius={80} paddingAngle={2}>
-            {split.map((x, i) => <Cell key={x.k} fill={RAINBOW[i % RAINBOW.length]} />)}</Pie><Tooltip {...TT} formatter={money} /><Legend iconSize={10} wrapperStyle={{ fontSize: 11 }} /></PieChart></ResponsiveContainer> : empty('No orders in this period.')}</Tile>
-        <Tile n={4} title="Revenue by payer" sub="Payments in this period">
-          {payers.length ? <ResponsiveContainer width="100%" height={250}><PieChart><Pie data={payers} dataKey="v" nameKey="k" innerRadius={48} outerRadius={80} paddingAngle={2}>
-            {payers.map((x, i) => <Cell key={x.k} fill={RAINBOW[(i + 1) % RAINBOW.length]} />)}</Pie><Tooltip {...TT} formatter={money} /><Legend iconSize={10} wrapperStyle={{ fontSize: 11 }} /></PieChart></ResponsiveContainer> : empty('No payments in this period.')}</Tile>
-
-        <Tile n={3} title="Break-even" sub="Whole month, overheads included">
-          {be ? (<div style={{ position: 'relative' }}>
-            <ResponsiveContainer width="100%" height={170}><PieChart><Pie data={[{ v: Math.min(sold, be) }, { v: Math.max(be - sold, 0) }]} dataKey="v" startAngle={180} endAngle={0} cy="90%" innerRadius="75%" outerRadius="105%" stroke="none">
-              <Cell fill={COL.gp} /><Cell fill="var(--line)" /></Pie></PieChart></ResponsiveContainer>
-            <div style={{ position: 'absolute', left: 0, right: 0, bottom: 4, textAlign: 'center' }}><b style={{ fontSize: 24 }}>{sold} / {be}</b><div className="sub">shirts sold</div></div></div>) : empty('Add overheads for this month to see break-even.')}</Tile>
-        <Tile n={5} title="Cost per shirt and margin by size" sub="Margin at the quantity price">
-          <ResponsiveContainer width="100%" height={260}><ComposedChart data={sizeData}><CartesianGrid vertical={false} stroke="var(--line)" />
-            <XAxis dataKey="n" {...AX} interval={0} angle={-35} textAnchor="end" height={54} /><YAxis yAxisId="l" {...AX} width={46} tickFormatter={kfmt} /><YAxis yAxisId="r" orientation="right" {...AX} width={40} unit="%" />
-            <Tooltip {...TT} formatter={(v, name) => (name === 'Margin' ? v + '%' : money(v))} /><Legend iconSize={10} />
-            <Bar yAxisId="l" dataKey="Cost" radius={[4, 4, 0, 0]}>{sizeData.map((x, i) => <Cell key={x.n} fill={RAINBOW[i % RAINBOW.length]} />)}</Bar>
-            <Line yAxisId="r" dataKey="Margin" stroke="#E6007E" strokeWidth={2.5} dot={{ r: 4, fill: '#E6007E' }} /></ComposedChart></ResponsiveContainer></Tile>
-        <Tile n={4} title="Outstanding balances" sub="All open invoices">
-          {owing.length ? <ResponsiveContainer width="100%" height={Math.max(220, owing.length * 38 + 50)}><BarChart data={owing} layout="vertical" margin={{ right: 16 }}>
-            <XAxis type="number" {...AX} tickFormatter={kfmt} /><YAxis type="category" dataKey="n" {...AX} width={110} interval={0} /><Tooltip {...TT} formatter={money} />
-            <Bar dataKey="Balance" radius={[0, 4, 4, 0]}>{owing.map((x, i) => <Cell key={x.n} fill={RAINBOW[i % RAINBOW.length]} />)}</Bar></BarChart></ResponsiveContainer> : empty('All invoices are paid.')}</Tile>
+      <div className="dash-kpis">
+        <Kt title="Revenue received" value={f0(cur.rev)} color={COL.rev} cur={cur.rev} prev={prev.rev} vs={vs} />
+        <Kt title="Production cost" value={f0(cur.cs)} color="#D4460C" cur={cur.cs} prev={prev.cs} up={false} vs={vs} />
+        <Kt title="Gross profit" value={f0(cur.gp)} color="#1B8A55" cur={cur.gp} prev={prev.gp} vs={vs} />
+        <Kt title="Overheads" value={f0(cur.ov)} color={COL.oh} dark cur={cur.ov} prev={prev.ov} up={false} vs={vs} />
+        <Kt title="Net profit" value={f0(cur.net)} color={cur.net < 0 ? '#C62828' : '#6A3FE0'} cur={cur.net} prev={prev.net} vs={vs} />
+        <Kt title="Still owed to you" value={f0(D.owed)} color="#C4006C" sub={D.owedLate > 0 ? `${f0(D.owedLate)} is overdue` : `${D.owingAll.length} unpaid orders`} />
       </div>
-    </>
+
+      <div className="dash-row">
+        <Pn n={6} title={view === 'w' ? 'Week by week' : 'Day by day'} sub={view === 'w' ? 'Revenue, cost and profit for each week' : 'Inside the selected period'}
+          right={<div className="dp-tog"><button className={view === 'w' ? 'on' : ''} onClick={() => setTv('w')}>Weeks</button><button className={view === 'd' ? 'on' : ''} onClick={() => setTv('d')}>Days</button></div>}>
+          <ResponsiveContainer width="100%" height="100%">
+            {view === 'w' ? (
+              <BarChart data={D.wkData} margin={{ top: 6, right: 4, left: 0, bottom: 0 }}><CartesianGrid vertical={false} stroke="var(--line)" />
+                <XAxis dataKey="n" {...AX} /><YAxis {...AX} width={46} tickFormatter={kfmt} /><Tooltip {...TT} formatter={money} /><Legend iconSize={9} wrapperStyle={{ fontSize: 12 }} />
+                <Bar dataKey="Revenue" fill={COL.rev} radius={[3, 3, 0, 0]} isAnimationActive={false} /><Bar dataKey="Production cost" fill={COL.cost} radius={[3, 3, 0, 0]} isAnimationActive={false} />
+                <Bar dataKey="Gross profit" fill={COL.gp} radius={[3, 3, 0, 0]} isAnimationActive={false} /><Bar dataKey="Net profit" fill={COL.net} radius={[3, 3, 0, 0]} isAnimationActive={false} /></BarChart>
+            ) : (
+              <BarChart data={D.dayData} margin={{ top: 6, right: 4, left: 0, bottom: 0 }}><CartesianGrid vertical={false} stroke="var(--line)" />
+                <XAxis dataKey="n" {...AX} interval={D.dayData.length > 16 ? 1 : 0} /><YAxis {...AX} width={46} tickFormatter={kfmt} /><Tooltip {...TT} formatter={money} labelFormatter={(l) => 'Day ' + l} /><Legend iconSize={9} wrapperStyle={{ fontSize: 12 }} />
+                <Bar dataKey="Revenue" fill={COL.rev} radius={[2, 2, 0, 0]} isAnimationActive={false} /><Bar dataKey="Production cost" fill={COL.cost} radius={[2, 2, 0, 0]} isAnimationActive={false} /><Bar dataKey="Overheads" fill={COL.oh} radius={[2, 2, 0, 0]} isAnimationActive={false} /></BarChart>
+            )}
+          </ResponsiveContainer>
+        </Pn>
+
+        <Pn n={3} title="Needs your attention" sub="Tap a row to open those orders">
+          <div className="dp-act">
+            {attention.map(([k, v, tone, href]) => (
+              <Link key={k} href={href} className={'act ' + (v ? tone : 'zero')}><span>{k}</span><b>{v}</b></Link>
+            ))}
+          </div>
+        </Pn>
+
+        <Pn n={3} title="Who owes you" sub={D.owingAll.length ? `Top ${Math.min(7, D.owingAll.length)} of ${D.owingAll.length} · red = overdue` : 'All open invoices'}>
+          {D.owingAll.length ? (
+            <ResponsiveContainer width="100%" height="100%"><BarChart data={D.owingAll.slice(0, 7)} layout="vertical" margin={{ left: 0, right: 38, top: 2, bottom: 2 }}>
+              <XAxis type="number" hide /><YAxis type="category" dataKey="n" {...AX} width={104} interval={0} tick={<YT w={104} />} />
+              <Tooltip {...TT} formatter={money} labelFormatter={jcTip} />
+              <Bar dataKey="Balance" radius={[0, 4, 4, 0]} maxBarSize={24} isAnimationActive={false}>
+                {D.owingAll.slice(0, 7).map((x) => <Cell key={x.jc} fill={x.late ? '#C62828' : COL.spend} />)}
+                <LabelList dataKey="Balance" position="right" formatter={kfmt} style={LBL} /></Bar></BarChart></ResponsiveContainer>
+          ) : <Nada t="All invoices are paid." />}
+        </Pn>
+      </div>
+
+      <div className="dash-row">
+        <Pn n={3} title="Spend per order" sub={D.spend.length > 8 ? `Biggest 8 of ${D.spend.length} · cost plus overhead share` : 'Production cost plus overhead share'}>
+          {D.spend.length ? (
+            <ResponsiveContainer width="100%" height="100%"><BarChart data={D.spend.slice(0, 8)} layout="vertical" margin={{ left: 0, right: 8, top: 2, bottom: 2 }}>
+              <XAxis type="number" {...AX} tickFormatter={kfmt} /><YAxis type="category" dataKey="n" {...AX} width={104} interval={0} tick={<YT w={104} size={11} />} /><Tooltip {...TT} formatter={money} labelFormatter={jcTip} />
+              <Bar dataKey="Production cost" stackId="a" fill={COL.cost} maxBarSize={24} isAnimationActive={false} /><Bar dataKey="Overhead share" stackId="a" fill={COL.oh} maxBarSize={24} isAnimationActive={false} /></BarChart></ResponsiveContainer>
+          ) : <Nada t="No orders received in this period." />}
+        </Pn>
+        <Pn n={2} title="Where cost goes" sub="This period">
+          {D.split.length ? <Donut rows={D.split} total={kfmt(sum(D.split, (x) => x.v))} label="total cost" /> : <Nada t="No orders in this period." />}
+        </Pn>
+        <Pn n={2} title="Who paid" sub="Payments this period">
+          {D.payers.length ? <Donut rows={D.payers} offset={1} total={kfmt(cur.rev)} label="received" /> : <Nada t="No payments in this period." />}
+        </Pn>
+        <Pn n={2} title="Break-even" sub="Whole month">
+          {D.be ? (
+            <div className="dp-be">
+              <div className="dp-bn">Each shirt earns <b>{f0(D.avg)}</b> after cost. Overheads: <b>{f0(D.ovM)}</b></div>
+              <div className="dp-bc"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={[{ v: Math.min(D.sold, D.be) }, { v: Math.max(D.be - D.sold, 0) }]} dataKey="v" startAngle={180} endAngle={0} cy="92%" innerRadius="72%" outerRadius="100%" stroke="none" isAnimationActive={false}>
+                <Cell fill={D.sold >= D.be ? COL.gp : COL.oh} /><Cell fill="var(--line)" /></Pie></PieChart></ResponsiveContainer>
+                <div className="dp-mid" style={{ top: 'auto', bottom: 0 }}><b>{D.sold} / {D.be}</b><span>shirts</span></div></div>
+              <div className={'dp-verdict ' + (D.sold >= D.be ? 'ok' : 'no')}>{D.sold >= D.be ? 'Overheads covered' : `${D.be - D.sold} more to cover overheads`}</div>
+            </div>
+          ) : <Nada t="Add this month's overheads to see break-even." />}
+        </Pn>
+        <Pn n={3} title="Profit by product" sub="Before discounts · red = under 20%">
+          {D.prod.length ? (
+            <ResponsiveContainer width="100%" height="100%"><BarChart data={D.prod.slice(0, 6)} layout="vertical" margin={{ left: 0, right: 72, top: 2, bottom: 2 }}>
+              <XAxis type="number" hide /><YAxis type="category" dataKey="n" {...AX} width={100} interval={0} tick={<YT w={100} />} />
+              <Tooltip {...TT} formatter={(v, k, p) => (k === 'Profit' ? `${money(v)} · margin ${p.payload.Margin.toFixed(0)}%` : v)} />
+              <Bar dataKey="Profit" radius={[0, 4, 4, 0]} maxBarSize={26} isAnimationActive={false}>
+                {D.prod.slice(0, 6).map((x) => <Cell key={x.n} fill={x.Margin < 20 ? '#C62828' : COL.gp} />)}
+                <LabelList dataKey="Profit" position="right" formatter={(v) => kfmt(v)} content={({ x, y, width, height, value, index }) => (
+                  <text x={x + width + 5} y={y + height / 2 + 4} fill="var(--ink)" fontSize={11}>{kfmt(value)} · {D.prod[index].Margin.toFixed(0)}%</text>)} /></Bar></BarChart></ResponsiveContainer>
+          ) : <Nada t="No orders in this period." />}
+        </Pn>
+      </div>
+    </div>
   )
 }
 
@@ -178,6 +301,7 @@ const FILTERS = ['All', 'Overdue', 'Awaiting deposit or payment', 'Artwork pendi
 
 export function Orders() {
   const { S } = useApp(), [q, setQ] = useState(''), [f, setF] = useState('All')
+  useEffect(() => { const x = new URLSearchParams(window.location.search).get('f'); if (x && FILTERS.includes(x)) setF(x) }, [])
   const hit = (o) => [o.jc, o.qt, o.inv, o.ent, o.placed, o.phone].some((v) => (v || '').toLowerCase().includes(q.trim().toLowerCase()))
   const ok = (o) => { const p = phase(S, o); return f === 'All' || (f === 'Overdue' ? overdue(o) : f === 'Awaiting deposit or payment' ? p.startsWith('Awaiting') : p === f) }
   const list = [...S.orders].reverse().filter((o) => hit(o) && ok(o))
