@@ -9,13 +9,15 @@ import { isCompleted } from './Invoice'
 import { TODAY, ONE, f2, f0, pc, fd, sum, sz, cost, price, qty, calc, unit, alerts, snapshot, costParts, overheadByJob, jobNo, materialPlan, tolPct, COST_N, STAGES, mkStages, isDone, progress, overdue, phase, phaseTag, mkLine, lineH, lineLabel, prodOf, isFixed, typeGaps, typeMult, baseRates } from '@/lib/model'
 
 const Head = ({ title, sub }) => {
-  const { S, dispatch } = useApp()
+  const { S, dispatch, cloud } = useApp()
   return (
     <div className="top">
       <div><h1>{title}</h1>{sub && <div className="sub">{sub}</div>}</div>
-      <label>Signed in as
-        <select value={S.user} onChange={(e) => dispatch({ type: 'user', user: e.target.value })}><option>Staff 1</option><option>Staff 2</option></select>
-      </label>
+      {cloud
+        ? <label>Signed in as <b>{S.user}</b></label>
+        : <label>Signed in as
+            <select value={S.user} onChange={(e) => dispatch({ type: 'user', user: e.target.value })}><option>Staff 1</option><option>Staff 2</option></select>
+          </label>}
     </div>
   )
 }
