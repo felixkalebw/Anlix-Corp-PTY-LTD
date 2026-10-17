@@ -132,6 +132,59 @@ const Donut = ({ rows, offset = 0, total, label }) => {
   )
 }
 
+const DASH_CSS = `
+/* One-screen dashboard: the whole page is exactly the window height, so nothing needs scrolling */
+.main.dashmain,.main:has(>.dash){padding:12px 16px;gap:0}
+.dash{height:calc(100dvh - 24px);min-height:560px;display:grid;grid-template-rows:auto auto minmax(0,1fr) minmax(0,1fr);gap:10px}
+.dash-top{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.dash-top h1{font-size:20px}
+.dash-top .chip{min-height:34px;padding:0 12px;font-size:13px}
+.dash-top select{min-height:34px;padding:4px 8px;font-size:13px}
+.dash-kpis{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px}
+.dk{border-radius:10px;padding:8px 12px;min-width:0;display:flex;flex-direction:column;gap:1px}
+.dk-t{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;opacity:.92;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dk-v{font-size:clamp(19px,1.9vw,28px);font-weight:700;line-height:1.15;white-space:nowrap}
+.dk-s,.dk-d{font-size:11.5px;opacity:.95;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dk-d.bd{background:rgba(0,0,0,.28);color:#fff;border-radius:8px;padding:0 6px;display:inline-block;max-width:100%}
+.dash-row{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:10px;min-height:0}
+.dp{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:9px 12px 8px;min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+.dp>header{display:flex;align-items:baseline;flex-wrap:wrap;gap:0 8px}
+.dp h3{margin:0;font-size:14px;font-weight:700}
+.dp-sub{flex-basis:100%;order:3;font-size:11.5px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:2px}
+.dp>header .dp-tog{margin-left:auto}
+.dp-body{flex:1;min-height:0;position:relative}
+.dp-c2{grid-column:span 2}.dp-c3{grid-column:span 3}.dp-c6{grid-column:span 6}
+.dp-none{height:100%;display:grid;place-items:center;text-align:center;color:var(--mut);font-size:13px;padding:0 8px}
+.dp-tog{display:flex;background:var(--bg);border-radius:8px;padding:2px}
+.dp-tog button{font:inherit;font-size:12px;font-weight:600;border:0;background:transparent;color:var(--mut);padding:3px 10px;border-radius:6px;cursor:pointer}
+.dp-tog button.on{background:var(--card);color:var(--acc);box-shadow:0 1px 3px rgba(0,0,0,.15)}
+.dp-act{height:100%;display:grid;grid-auto-rows:minmax(0,1fr);gap:4px}
+.act{display:flex;align-items:center;justify-content:space-between;gap:8px;border-radius:8px;padding:0 10px;text-decoration:none;font-size:13px;font-weight:500;min-height:0;border-left:4px solid var(--line);background:var(--bg);color:var(--ink)}
+.act b{font-size:17px}.act:hover{filter:brightness(.96)}
+.act.bad{border-left-color:#C62828;background:#FDE8E8;color:#8E1B1B}.act.warn{border-left-color:#E08A00;background:#FFF1D6;color:#7A4A00}
+.act.info{border-left-color:#00A3E0;background:#E1F4FC;color:#075A7A}.act.good{border-left-color:#2BB673;background:#DDF5E8;color:#14633C}
+.act.zero{opacity:.55;color:var(--mut)}
+.dp-donut{height:100%;display:flex;flex-direction:column;gap:4px}
+.dp-dc{flex:1;min-height:0;position:relative}
+.dp-mid{position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);text-align:center;pointer-events:none;line-height:1.1}
+.dp-mid b{display:block;font-size:clamp(13px,1.2vw,18px)}.dp-mid span{font-size:10.5px;color:var(--mut)}
+.dp-leg{display:grid;gap:1px;font-size:11.5px}
+.dp-leg div{display:flex;align-items:center;gap:5px;min-width:0}.dp-leg i{width:8px;height:8px;border-radius:2px;flex:none}
+.dp-leg span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dp-leg b{font-weight:600}
+.dp-be{height:100%;display:flex;flex-direction:column;gap:4px}.dp-bc{flex:1;min-height:0;position:relative}
+.dp-verdict{font-size:12px;font-weight:600;text-align:center;border-radius:8px;padding:4px 6px}.dp-verdict.ok{background:#DDF5E8;color:#14633C}.dp-verdict.no{background:#FFF1D6;color:#7A4A00}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .act.bad{background:#3A1717;color:#FF9B9B}:root:not([data-theme="light"]) .act.warn{background:#3A2A0E;color:#FFC870}:root:not([data-theme="light"]) .act.info{background:#0F2D3A;color:#7FD3F0}:root:not([data-theme="light"]) .act.good{background:#10301F;color:#6FD596}:root:not([data-theme="light"]) .dp-verdict.ok{background:#10301F;color:#6FD596}:root:not([data-theme="light"]) .dp-verdict.no{background:#3A2A0E;color:#FFC870}}
+/* Phones and very short windows cannot fit everything at once, so they stack and scroll instead */
+@media (max-width:1100px),(max-height:560px){
+  .main.dashmain,.main:has(>.dash){padding:12px}.dash{height:auto;min-height:0;display:flex;flex-direction:column}
+  .dash-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}.dash-row{grid-template-columns:repeat(6,minmax(0,1fr))}
+  .dp-c2{grid-column:span 3}.dp-c3,.dp-c6{grid-column:span 6}.dp{min-height:260px}.dp-donut,.dp-be{min-height:230px}
+}
+@media (max-width:560px){.dash-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.dp-c2{grid-column:span 6}}
+
+.dp-bn{font-size:12px;color:var(--mut);line-height:1.35}.dp-bn b{color:var(--ink)}
+`
+
 export function Dashboard() {
   const { S } = useApp()
   const [m, setM] = useState(TODAY.slice(0, 7)), [wk, setWk] = useState(0), [tv, setTv] = useState(null)
@@ -199,6 +252,8 @@ export function Dashboard() {
   ]
 
   return (
+    <>
+    <style>{DASH_CSS}</style>
     <div className="dash">
       <div className="dash-top">
         <h1>Dashboard</h1>
@@ -294,6 +349,7 @@ export function Dashboard() {
         </Pn>
       </div>
     </div>
+    </>
   )
 }
 
