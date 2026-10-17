@@ -13,6 +13,7 @@ export function Provider({ children }) {
   const superAdmin = !!auth && auth.role === 'super_admin'
   // Deleting a job card is for the super admin only. Anyone else's delete request is dropped here.
   const dispatch = useCallback((a) => { if (a && a.type === 'delOrder' && !superAdmin) return; rawDispatch(a && a.type === 'delOrder' ? { ...a, by: (auth.user && auth.user.email) || a.by } : a) }, [superAdmin, auth])
+  const who = (auth && auth.user && ((auth.user.user_metadata && auth.user.user_metadata.full_name) || auth.user.email)) || 'Unknown user'
   const [ready, setReady] = useState(false)
   const [session, setSession] = useState(null)
   const [role, setRole] = useState(supabase ? null : 'admin')
@@ -42,6 +43,8 @@ export function Provider({ children }) {
     supabase.from('staff_members').select('role').eq('user_id', session.user.id).maybeSingle().then(({ data }) => setRole(data?.role || 'viewer'))
     supabase.from('anlix_app_state').select('state').eq('id', 1).maybeSingle().then(({ data, error }) => {
       if (data?.state) dispatch({ type: 'load', state: data.state })
+      // The name on every audit entry is the person who is really signed in, not a name picked from a list.
+      dispatch({ type: 'user', user: who })
       pulled.current = !error
       setSync(error ? 'Could not load shared data: ' + error.message : 'Synced')
     })
