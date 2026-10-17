@@ -2,11 +2,10 @@
 import { createContext, useCallback, useContext, useEffect, useReducer, useRef, useState } from 'react'
 import { initial, reduce } from '@/lib/model'
 import { supabase } from '@/lib/supabase'
-import { useAuth } from './AuthProvider'
+import { useAuth, CACHE_KEY } from './AuthProvider'
 
 const Ctx = createContext(null)
 export const useApp = () => useContext(Ctx)
-const KEY = 'anlix-tracker-next'
 
 export function Provider({ children }) {
   const [S, rawDispatch] = useReducer(reduce, null, initial)
@@ -22,7 +21,12 @@ export function Provider({ children }) {
   const timer = useRef()
 
   useEffect(() => {
-    try { const s = localStorage.getItem(KEY); if (s) dispatch({ type: 'load', state: JSON.parse(s) }) } catch {}
+    // Signed-in (cloud) mode keeps nothing in this browser: the shared database is the only copy.
+    // Local-only mode has no server, so it still saves to this browser.
+    try {
+      if (supabase) localStorage.removeItem(CACHE_KEY)
+      else { const s = localStorage.getItem(CACHE_KEY); if (s) dispatch({ type: 'load', state: JSON.parse(s) }) }
+    } catch {}
     setReady(true)
   }, [])
 
@@ -45,8 +49,8 @@ export function Provider({ children }) {
 
   useEffect(() => {
     if (!ready) return
-    try { localStorage.setItem(KEY, JSON.stringify(S)) } catch {}
-    if (!supabase || !session || !pulled.current) return
+    if (!supabase) { try { localStorage.setItem(CACHE_KEY, JSON.stringify(S)) } catch {} return }
+    if (!session || !pulled.current) return
     clearTimeout(timer.current)
     timer.current = setTimeout(async () => {
       setSync('Saving…')
