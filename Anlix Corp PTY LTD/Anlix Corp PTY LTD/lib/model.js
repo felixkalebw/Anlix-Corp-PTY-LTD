@@ -286,6 +286,38 @@ export function costParts(S, ord) {
   return { jobs, comp: COST_N.map((_, i) => sum(jobs, (j) => j.v[i])) }
 }
 
+// Overheads per job card.
+// An overhead with a job card (x.jc) is a direct cost of that order.
+// An overhead with no job card is shared (rent, electricity and so on): it is split across the orders placed in the same month, in proportion to shirts.
+// Anything that cannot be placed on an order (no orders that month, or the job card was deleted) is reported as unallocated, so the grand total always equals the overheads recorded.
+export function overheadByJob(S) {
+  const month = (d) => String(d || '').slice(0, 7)
+  const by = new Map(S.orders.map((o) => [o.jc, { direct: 0, shared: 0, total: 0, shirts: qty(o) }]))
+  const shirtsIn = new Map()
+  S.orders.forEach((o) => shirtsIn.set(month(o.date), (shirtsIn.get(month(o.date)) || 0) + qty(o)))
+  let unallocated = 0
+  const list = S.over || []
+  list.forEach((x) => {
+    const amt = +x.a || 0
+    if (x.jc) {
+      const r = by.get(x.jc)
+      if (r) r.direct += amt
+      else unallocated += amt
+      return
+    }
+    const m = month(x.d), tot = shirtsIn.get(m) || 0
+    if (!tot) { unallocated += amt; return }
+    S.orders.forEach((o) => {
+      if (month(o.date) !== m) return
+      const r = by.get(o.jc)
+      if (r) r.shared += (amt * r.shirts) / tot
+    })
+  })
+  by.forEach((r) => { r.total = r.direct + r.shared })
+  const direct = sum([...by.values()], (r) => r.direct), shared = sum([...by.values()], (r) => r.shared)
+  return { by, direct, shared, allocated: direct + shared, unallocated, total: sum(list, (x) => +x.a || 0) }
+}
+
 export function reduce(S, a) {
   const log = (t, o = '', u = S.user) => ({ ts: now(), u, o, t })
   const add = (...e) => ({ ...S, audit: [...e.reverse(), ...S.audit] })
@@ -588,8 +620,8 @@ export function reduce(S, a) {
       const e = log(`Job card ${o.jc} deleted by ${by}: ${why}. Removed with it: ${o.qt}, ${o.inv}, ${o.pays.length} payment(s) totalling ${f2(c.paid)}, ${fin.length} cost entr${fin.length === 1 ? 'y' : 'ies'}. It was for ${o.ent || o.placed || 'unknown customer'}, ${c.q} item(s), net total ${f2(c.net)}${o.closed ? ', already closed' : o.prod ? ', in production' : ''}`, o.jc, by)
       return { ...add(e), orders: S.orders.filter((x) => x.jc !== o.jc), finance: (S.finance || []).filter((x) => x.ref !== o.jc) }
     }
-    case 'addOver': return { ...add(log(`Overhead ${a.n} added: ${f2(a.a)} on ${a.d}`)), over: [...S.over, { n: a.n, a: a.a, d: a.d }] }
-    case 'delOver': { const x = S.over[a.i]; return x ? { ...add(log(`Overhead ${x.n} (${f2(x.a)} on ${x.d}) removed`)), over: S.over.filter((_, i) => i !== a.i) } : S }
+    case 'addOver': return { ...add(log(`Overhead ${a.n} added: ${f2(a.a)} on ${a.d}${a.jc ? ' (direct cost of ' + a.jc + ')' : ' (shared)'}`, a.jc || '')), over: [...S.over, { n: a.n, a: a.a, d: a.d, ...(a.jc ? { jc: a.jc } : {}) }] }
+    case 'delOver': { const x = S.over[a.i]; return x ? { ...add(log(`Overhead ${x.n} (${f2(x.a)} on ${x.d}) removed`, x.jc || '')), over: S.over.filter((_, i) => i !== a.i) } : S }
     default: return S
   }
 }
