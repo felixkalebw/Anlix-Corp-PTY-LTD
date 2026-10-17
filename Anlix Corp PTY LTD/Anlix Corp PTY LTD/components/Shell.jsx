@@ -43,7 +43,7 @@ export default function Shell({ children }) {
         <div className="sub" style={{ padding: '12px', color: 'var(--sink)' }}>{sync}</div>
         {cloud && session && <button className="nv" onClick={() => supabase.auth.signOut()}>Sign out</button>}
       </nav>
-      <main className="main">{ready && children}</main>
+      <main className={'main' + (path === '/' ? ' dashmain' : '')}>{ready && children}</main>
     </div>
   )
 }
