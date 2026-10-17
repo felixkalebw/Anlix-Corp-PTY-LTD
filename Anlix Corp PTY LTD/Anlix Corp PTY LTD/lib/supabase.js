@@ -1,5 +1,6 @@
-import { createClient } from '@supabase/supabase-js'
+// One shared Supabase client for the whole app (it lives in supabaseClient.js).
+// Having two separate clients is what caused the "Multiple GoTrueClient instances" warning.
+// This file keeps the old import path working. It exports null when the Supabase variables are missing, which means local-only mode.
+import { supabase as client, hasSupabase } from './supabaseClient'
 
-const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-export const supabase = url && key ? createClient(url, key) : null
+export const supabase = hasSupabase ? client : null
