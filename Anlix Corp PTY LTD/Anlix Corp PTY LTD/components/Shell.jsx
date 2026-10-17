@@ -30,7 +30,7 @@ function SignIn() {
 
 export default function Shell({ children }) {
   const { cloud, session, sync, ready } = useApp()
-  const { can } = useAuth()
+  const { can, signOut } = useAuth()
   const path = usePathname()
   if (cloud && !session) return <SignIn />
   return (
@@ -41,7 +41,7 @@ export default function Shell({ children }) {
           <Link key={h} href={h} className={'nv' + (path === h || (h === '/orders' && path.startsWith('/orders/')) ? ' on' : '')}>{t}</Link>
         ))}
         <div className="sub" style={{ padding: '12px', color: 'var(--sink)' }}>{sync}</div>
-        {cloud && session && <button className="nv" onClick={() => supabase.auth.signOut()}>Sign out</button>}
+        {cloud && session && <button className="nv" onClick={signOut}>Sign out</button>}
       </nav>
       <main className={'main' + (path === '/' ? ' dashmain' : '')}>{ready && children}</main>
     </div>
