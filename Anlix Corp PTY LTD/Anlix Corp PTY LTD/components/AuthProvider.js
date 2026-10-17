@@ -7,6 +7,12 @@ import "./auth.css";
 const Ctx = createContext(null);
 export const useAuth = () => useContext(Ctx);
 
+// Older versions kept a full copy of the business data in this browser. It is removed whenever nobody is signed in.
+export const CACHE_KEY = "anlix-tracker-next";
+export const purgeLocalCopy = () => {
+  try { localStorage.removeItem(CACHE_KEY); sessionStorage.removeItem(CACHE_KEY); } catch {}
+};
+
 // <Can perm="payments.record"><AddPaymentButton /></Can>
 export function Can({ perm, children, fallback = null }) {
   const { can } = useAuth();
@@ -20,7 +26,7 @@ export default function AuthProvider({ children }) {
   const load = useCallback(async () => {
     if (!hasSupabase) return setState({ loading: false, user: null, access: null });
     const { data: s } = await supabase.auth.getSession();
-    if (!s.session) return setState({ loading: false, user: null, access: null });
+    if (!s.session) { purgeLocalCopy(); return setState({ loading: false, user: null, access: null }); }
     const { data, error } = await supabase.rpc("my_access");
     setState({ loading: false, user: s.session.user, access: error ? null : data });
   }, []);
@@ -29,6 +35,7 @@ export default function AuthProvider({ children }) {
     load();
     if (!hasSupabase) return;
     const { data } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_OUT") purgeLocalCopy(); // also covers an expired or revoked session
       if (event === "PASSWORD_RECOVERY") setRecovery(true);
       setTimeout(load, 0); // don't call Supabase inside the callback itself
     });
@@ -41,7 +48,7 @@ export default function AuthProvider({ children }) {
   const perms = access?.permissions ?? [];
   const can = (p) => approved && (role === "super_admin" || perms.includes(p));
   const signOut = async () => {
-    await supabase.auth.signOut();
+    try { await supabase.auth.signOut(); } finally { purgeLocalCopy(); }
     setState({ loading: false, user: null, access: null });
   };
   const refresh = (recoveryDone) => {
