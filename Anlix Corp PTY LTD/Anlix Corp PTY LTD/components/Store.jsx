@@ -59,7 +59,7 @@ export function Provider({ children }) {
       setSync('Saving…')
       const { error } = await supabase.from('anlix_app_state').upsert(
         { id: 1, state: S, updated_at: new Date().toISOString(), updated_by: session.user.id }, { onConflict: 'id' })
-      setSync(error ? 'Save failed: ' + error.message : 'Synced')
+      setSync(error ? 'NOT SAVED: ' + error.message + ' Refresh the page to load the latest data, then redo your last change.' : 'Synced')
     }, 1500)
   }, [S])
 
