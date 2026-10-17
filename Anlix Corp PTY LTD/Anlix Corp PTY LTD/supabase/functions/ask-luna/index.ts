@@ -40,6 +40,10 @@ Deno.serve(async (req) => {
   const { data: auth } = await supa.auth.getUser()
   const user = auth?.user
   if (!user) return json({ error: 'Sign in first' }, 401)
+
+  // 1b. Signing up is open, so being signed in is not enough: the person must be an approved staff member with the ai.use permission.
+  const { data: mayUse, error: permErr } = await supa.rpc('has_perm', { p: 'ai.use' })
+  if (permErr || mayUse !== true) return json({ error: 'You do not have permission to use the AI assistant' }, 403)
   const allowed = (Deno.env.get('AI_ALLOWED_EMAILS') ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
   if (allowed.length && !allowed.includes((user.email ?? '').toLowerCase())) return json({ error: 'Not permitted' }, 403)
 
