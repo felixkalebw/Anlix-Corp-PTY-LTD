@@ -6,7 +6,7 @@ import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, Cart
 import { useApp } from './Store'
 import { supabase } from '@/lib/supabase'
 import { isCompleted } from './Invoice'
-import { TODAY, ONE, f2, f0, pc, fd, sum, sz, cost, price, qty, calc, unit, alerts, snapshot, costParts, jobNo, materialPlan, tolPct, COST_N, STAGES, mkStages, isDone, progress, overdue, phase, phaseTag, mkLine, lineH, lineLabel, prodOf, isFixed, typeGaps, typeMult, baseRates } from '@/lib/model'
+import { TODAY, ONE, f2, f0, pc, fd, sum, sz, cost, price, qty, calc, unit, alerts, snapshot, costParts, overheadByJob, jobNo, materialPlan, tolPct, COST_N, STAGES, mkStages, isDone, progress, overdue, phase, phaseTag, mkLine, lineH, lineLabel, prodOf, isFixed, typeGaps, typeMult, baseRates } from '@/lib/model'
 
 const Head = ({ title, sub }) => {
   const { S, dispatch } = useApp()
@@ -643,7 +643,12 @@ export function Job() {
             <div className="tot"><span>Discount{o.dv ? ': ' + o.dr : ''}</span><span>−{f2(c.d)}</span></div>
             <div className="tot big"><span>Net total</span><span>{f2(c.net)}</span></div>
             <div className="tot"><span>Production cost</span><span>{f2(c.cs)}</span></div>
-            <div className="tot"><span>Gross profit</span><span>{f2(c.gp)}</span></div></div>
+            <div className="tot"><span>Gross profit</span><span>{f2(c.gp)}</span></div>
+            {(() => { const r = overheadByJob(S).by.get(o.jc) || { direct: 0, shared: 0, total: 0 }; return (<>
+              <div className="tot"><span>Overhead: direct costs on this job</span><span>{f2(r.direct)}</span></div>
+              <div className="tot"><span>Overhead: share of shared monthly costs</span><span>{f2(r.shared)}</span></div>
+              <div className="tot"><span>Total overhead on this job</span><span>{f2(r.total)}</span></div>
+              <div className="tot big"><span>Profit after overhead</span><span>{f2(c.gp - r.total)}</span></div></>) })()}</div>
           <MaterialPlan lines={o.lines} title="Materials required" order={o} jc={o.jc} />
           <Production o={o} c={c} />
         </div>
@@ -808,21 +813,38 @@ export function Costing() {
 }
 
 export function Overheads() {
-  const { S, dispatch } = useApp(), [x, setX] = useState({ n: '', a: '', d: TODAY })
+  const { S, dispatch } = useApp(), [x, setX] = useState({ n: '', a: '', d: TODAY, jc: '' })
+  const oh = overheadByJob(S), rows = S.orders.map((o) => ({ o, r: oh.by.get(o.jc) })).reverse()
   return (
     <>
-      <Head title="Overheads" sub="Daily or monthly fixed costs used for break-even and net profit." />
+      <Head title="Overheads" sub="Daily or monthly fixed costs used for break-even and net profit, and the overhead spent on each job card." />
       <div className="card"><h2>Add an overhead</h2>
         <div className="fm">
           <label>Item<input value={x.n} onChange={(e) => setX({ ...x, n: e.target.value })} placeholder="e.g. Rent" /></label>
           <label>Amount (P)<input type="number" min="0" value={x.a} onChange={(e) => setX({ ...x, a: e.target.value })} /></label>
           <label>Date<input type="date" value={x.d} onChange={(e) => setX({ ...x, d: e.target.value })} /></label>
-          <button className="btn" onClick={() => { if (x.n.trim() && +x.a > 0 && x.d) { dispatch({ type: 'addOver', n: x.n.trim(), a: +x.a, d: x.d }); setX({ ...x, n: '', a: '' }) } }}>Add overhead</button>
-        </div></div>
+          <label>Job card<select value={x.jc} onChange={(e) => setX({ ...x, jc: e.target.value })}>
+            <option value="">Shared: split across that month's orders</option>
+            {[...S.orders].reverse().map((o) => <option key={o.jc} value={o.jc}>{o.jc} · {o.ent}</option>)}</select></label>
+          <button className="btn" onClick={() => { if (x.n.trim() && +x.a > 0 && x.d) { dispatch({ type: 'addOver', n: x.n.trim(), a: +x.a, d: x.d, jc: x.jc }); setX({ ...x, n: '', a: '' }) } }}>Add overhead</button>
+        </div>
+        <p className="sub">Pick a job card for a cost that belongs to one order (packaging, delivery, design time). Leave it as Shared for rent, electricity and similar costs; those are split across the orders placed in the same month, in proportion to shirts.</p></div>
+      <div className="card"><h2>Overhead per job card</h2>
+        {rows.length ? (
+          <>
+            <Table head={['Job card', 'Customer', 'Shirts', 'Direct', 'Share of shared', 'Total overhead', 'Per shirt', 'Gross profit', 'Profit after overhead']} right={2}>
+              {rows.map(({ o, r }) => { const g = calc(S, o).gp; return (
+                <tr key={o.jc}><td><Link href={`/orders/${o.jc}`}>{o.jc}</Link></td><td>{o.ent}</td><td className="r">{r.shirts}</td><td className="r">{f2(r.direct)}</td><td className="r">{f2(r.shared)}</td><td className="r">{f2(r.total)}</td><td className="r">{f2(r.shirts ? r.total / r.shirts : 0)}</td><td className="r">{f2(g)}</td><td className="r">{f2(g - r.total)}</td></tr>) })}
+            </Table>
+            <div className="tot"><span>Direct overheads on job cards</span><span>{f2(oh.direct)}</span></div>
+            <div className="tot"><span>Shared overheads placed on job cards</span><span>{f2(oh.shared)}</span></div>
+            <div className="tot big"><span>Total overhead across all job cards</span><span>{f2(oh.allocated)}</span></div>
+            {oh.unallocated > 0.005 && <div className="note w">{f2(oh.unallocated)} of the recorded overheads is not on any job card, because no order was placed in that month or its job card was deleted. All recorded overheads: {f2(oh.total)}.</div>}
+          </>) : <p className="sub">No orders yet.</p>}</div>
       <div className="card">{S.over.length ? (
-        <Table head={['Date', 'Item', 'Amount', '']} right={2}>
+        <Table head={['Date', 'Item', 'Job card', 'Amount', '']} right={3}>
           {S.over.map((v, i) => ({ v, i })).sort((a, b) => b.v.d.localeCompare(a.v.d)).map(({ v, i }) => (
-            <tr key={i}><td>{fd(v.d)}</td><td>{v.n}</td><td className="r">{f2(v.a)}</td><td><button className="btn o" onClick={() => dispatch({ type: 'delOver', i })}>Remove</button></td></tr>))}
+            <tr key={i}><td>{fd(v.d)}</td><td>{v.n}</td><td>{v.jc || 'Shared'}</td><td className="r">{f2(v.a)}</td><td><button className="btn o" onClick={() => dispatch({ type: 'delOver', i })}>Remove</button></td></tr>))}
         </Table>) : <p className="sub">No overheads recorded yet.</p>}</div>
     </>
   )
