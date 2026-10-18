@@ -3,11 +3,20 @@ import { useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 
 const STATUS_TEXT = {
-  pending: ["Waiting for approval", "Your request has been received. You'll get access once an admin approves it."],
+  pending: ["Waiting for approval", "Your email is confirmed. Your request is waiting for the Super Admin to approve it."],
   rejected: ["Request declined", "Your request wasn't approved. Contact an administrator if this is a mistake."],
   suspended: ["Access suspended", "Your access has been paused. Contact an administrator."],
   none: ["Account not set up", "Your login has no staff profile yet. Contact an administrator."],
 };
+
+// Real first + last name: at least two words, letters (plus ' . -) only
+const NAME_PART = /^\p{L}[\p{L}'’.-]+$/u;
+function checkName(raw) {
+  const parts = raw.trim().split(/\s+/);
+  if (parts.length < 2 || !parts.every((p) => NAME_PART.test(p)))
+    throw new Error("Enter your real first and last name.");
+  return parts.join(" ");
+}
 
 function Shell({ title, sub, children }) {
   return (
@@ -25,12 +34,14 @@ const Field = ({ label, ...props }) => (
   <label className="ax-f">{label}<input required {...props} /></label>
 );
 
-export default function AuthGate({ user, access, recovery, onDone, signOut }) {
+export default function AuthGate({ user, access, recovery, notice, onDone, signOut }) {
   const [view, setView] = useState("login");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
   const go = (v) => { setView(v); setMsg(null); };
-  const note = msg && <div className={"ax-msg" + (msg.err ? " err" : "")}>{msg.text}</div>;
+  // "Email confirmed" / "signed out for inactivity" messages show on the login view
+  const shown = msg || (view === "login" ? notice : null);
+  const note = shown && <div className={"ax-msg" + (shown.err ? " err" : "")}>{shown.text}</div>;
   const link = (text, v) => <button type="button" className="ax-link" onClick={() => go(v)}>{text}</button>;
 
   const submit = (fn) => async (e) => {
@@ -72,19 +83,26 @@ export default function AuthGate({ user, access, recovery, onDone, signOut }) {
 
   if (view === "signup")
     return (
-      <Shell title="Request access" sub="Create your account. An admin will review it.">
+      <Shell title="Request access" sub="Use your real name and work email. You'll confirm your email, then the Super Admin reviews your request.">
         <form onSubmit={submit(async (v) => {
+          const fullName = checkName(v.name);
+          const email = v.email.trim().toLowerCase();
           if (v.password.length < 8) throw new Error("Password must be at least 8 characters.");
           if (v.password !== v.confirm) throw new Error("Passwords do not match.");
           const { data, error } = await supabase.auth.signUp({
-            email: v.email.trim(), password: v.password,
-            options: { data: { full_name: v.name.trim(), phone: v.phone.trim() } },
+            email,
+            password: v.password,
+            options: {
+              data: { full_name: fullName, phone: v.phone.trim() },
+              emailRedirectTo: `${window.location.origin}/?confirmed=1`,
+            },
           });
           if (error) throw error;
-          if (data.session) return onDone();
-          setMsg({ text: "Request sent. Confirm your email, then sign in. An admin must approve you before you can get in." });
+          // Safety net: if email confirmation is ever switched off, don't leave them signed in
+          if (data.session) await supabase.auth.signOut();
+          setMsg({ text: "Request sent. Check your inbox and click the confirmation link. You'll be brought back here to sign in, and the Super Admin must approve you before you can get in." });
         })}>
-          <Field label="Full name" name="name" autoComplete="name" />
+          <Field label="Full name (first and last)" name="name" autoComplete="name" />
           <Field label="Phone" type="tel" name="phone" autoComplete="tel" />
           <Field label="Email" type="email" name="email" autoComplete="email" />
           <Field label="Password (min 8 characters)" type="password" name="password" autoComplete="new-password" />
@@ -114,7 +132,10 @@ export default function AuthGate({ user, access, recovery, onDone, signOut }) {
     <Shell title="Welcome back" sub="Sign in to the order tracker.">
       <form onSubmit={submit(async ({ email, password }) => {
         const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
-        if (error) throw error;
+        if (error)
+          throw new Error(/not confirmed/i.test(error.message)
+            ? "Please confirm your email first. Check your inbox for the link."
+            : error.message);
         onDone();
       })}>
         <Field label="Email" type="email" name="email" autoComplete="email" />
