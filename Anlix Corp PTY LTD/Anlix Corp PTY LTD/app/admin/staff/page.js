@@ -54,25 +54,40 @@ function MemberRow({ m, roles, me, isSuper, reload }) {
   const [role, setRole] = useState(m.role || "");
   const locked = m.user_id === me.user.id || (!isSuper && ADMIN_ROLES.includes(m.role));
   const options = roles.filter((r) => isSuper || !ADMIN_ROLES.includes(r.name));
+
   async function act(status) {
+    if (status === "approved" && !role) return alert("Choose a role first.");
     const { error } = await supabase.rpc("admin_review_member", { p_user: m.user_id, p_status: status, p_role: role || null });
     if (error) alert(error.message); else reload();
   }
-  const btn = (label, status, cls = "") => <button className={"ax-btn " + cls} onClick={() => act(status)}>{label}</button>;
+  const btn = (label, status, cls = "", disabled = false) => (
+    <button className={"ax-btn " + cls} disabled={disabled} onClick={() => act(status)}>{label}</button>
+  );
+
   return (
     <div className="ax-item">
       <div className="grow">
         <b>{m.full_name || "(no name)"}</b>
         <small>{m.email}{m.phone ? " · " + m.phone : ""}</small>
+        <small>Requested {new Date(m.created_at).toLocaleString()}</small>
       </div>
+      <span className={"ax-badge " + (m.email_confirmed ? "approved" : "pending")}>
+        {m.email_confirmed ? "email verified" : "email not confirmed"}
+      </span>
       <span className={"ax-badge " + m.status}>{m.status}</span>
       <select className="ax-sel" style={{ width: "auto", margin: 0 }} value={role} disabled={locked} onChange={(e) => setRole(e.target.value)}>
         <option value="">Choose role...</option>
         {options.map((r) => <option key={r.name} value={r.name}>{r.label}</option>)}
       </select>
+
       {!locked && m.status === "approved" && <>{btn("Save role", "approved")}{btn("Suspend", "suspended", "bad")}</>}
-      {!locked && m.status === "pending" && <>{btn("Approve", "approved")}{btn("Reject", "rejected", "bad")}</>}
-      {!locked && (m.status === "rejected" || m.status === "suspended") && btn("Approve", "approved")}
+
+      {/* Only the Super Admin can verify (approve / reject) requests */}
+      {!locked && m.status === "pending" && (isSuper
+        ? <>{btn("Approve", "approved", "", !m.email_confirmed)}{btn("Reject", "rejected", "bad")}</>
+        : <small>Super Admin must approve</small>)}
+      {!locked && isSuper && (m.status === "rejected" || m.status === "suspended") &&
+        btn("Approve", "approved", "", !m.email_confirmed)}
     </div>
   );
 }
