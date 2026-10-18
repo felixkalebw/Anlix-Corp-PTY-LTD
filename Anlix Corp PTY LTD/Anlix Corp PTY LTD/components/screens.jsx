@@ -6,6 +6,8 @@ import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, Cart
 import { useApp } from './Store'
 import { supabase } from '@/lib/supabase'
 import { isCompleted } from './Invoice'
+import { WhatsAppRow, QcPanel, JobPayouts, StockNote, Reminders } from './more'
+import { customers } from '@/lib/features'
 import { TODAY, ONE, f2, f0, pc, fd, sum, sz, cost, price, qty, calc, unit, alerts, snapshot, costParts, overheadByJob, jobNo, materialPlan, tolPct, COST_N, STAGES, mkStages, isDone, progress, overdue, phase, phaseTag, mkLine, lineH, lineLabel, prodOf, isFixed, typeGaps, typeMult, baseRates } from '@/lib/model'
 
 const Head = ({ title, sub }) => {
@@ -350,6 +352,7 @@ export function Dashboard() {
           ) : <Nada t="No orders in this period." />}
         </Pn>
       </div>
+      <Reminders />
     </div>
     </>
   )
@@ -501,8 +504,14 @@ export function NewOrder() {
               <datalist id="staff-names">{known.map((n) => <option key={n} value={n} />)}</datalist>
               {tried && !staffOk && <span className="note w" style={{ display: 'block', marginTop: 4 }}>Enter the name of the staff member taking this order.</span>}
             </label>
-            <label>Placed by<input value={d.placed} onChange={set('placed')} placeholder="Person's name" /></label>
-            <label>Entity or company<input value={d.ent} onChange={set('ent')} placeholder="Company name" /></label>
+            <label>Placed by<input list="known-contacts" value={d.placed} onChange={set('placed')} placeholder="Person's name" autoComplete="off" />
+              <datalist id="known-contacts">{[...new Set(customers(S).flatMap((c) => c.contacts))].map((n) => <option key={n} value={n} />)}</datalist></label>
+            <label>Entity or company<input list="known-ents" value={d.ent} autoComplete="off" placeholder="Company name" onChange={(e) => {
+              const v = e.target.value, hit = customers(S).find((c) => c.name.toLowerCase() === v.trim().toLowerCase())
+              setD((p) => ({ ...p, ent: v, ...(hit && !p.phone ? { phone: hit.phone || '' } : {}), ...(hit && !p.placed && hit.contacts[0] ? { placed: hit.contacts[0] } : {}) }))
+            }} />
+              <datalist id="known-ents">{customers(S).map((c) => <option key={c.key} value={c.name} />)}</datalist>
+              <span className="sub">Pick an existing customer and their phone number fills in.</span></label>
             <label>Phone<input type="tel" value={d.phone} onChange={set('phone')} /></label>
             <label>Due date<input type="date" value={d.dueDate} onChange={set('dueDate')} /></label>
           </div>
@@ -653,8 +662,12 @@ export function Job() {
               <div className="tot big"><span>Profit after overhead</span><span>{f2(c.gp - r.total)}</span></div></>) })()}</div>
           <MaterialPlan lines={o.lines} title="Materials required" order={o} jc={o.jc} />
           <Production o={o} c={c} />
+          <StockNote o={o} />
+          {o.prod && <QcPanel o={o} />}
+          <JobPayouts o={o} />
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <WhatsAppRow o={o} />
           <div className="card"><h2>Payments</h2>
             <Table head={['Date', 'Paid by', 'Entity', 'Amount']} right={3}>{o.pays.map((x, i) => <tr key={i}><td>{fd(x.d)}</td><td>{x.by}</td><td>{x.ent}</td><td className="r">{f2(x.amt)}</td></tr>)}</Table>
             <div className="tot"><span>Total paid</span><span>{f2(c.paid)}</span></div>
