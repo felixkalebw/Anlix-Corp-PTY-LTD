@@ -6,7 +6,7 @@ import { useApp } from './Store'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/components/AuthProvider'
 
-const NAV = [['/', 'Dashboard'], ['/orders', 'Orders'], ['/new', 'New order'], ['/payments', 'Payments'], ['/app/documents', 'Quotations & invoices', 'documents.view'], ['/costing', 'Costing and prices'], ['/variance', 'Metre variance'], ['/overheads', 'Overheads'], ['/audit', 'Audit log'], ['/data', 'Data and backups'], ['/ai', 'AI assistant'], ['/admin/staff', 'Staff access', 'staff.manage']]
+const NAV = [['/', 'Dashboard'], ['/orders', 'Orders'], ['/new', 'New order'], ['/customers', 'Customers', 'orders.view'], ['/payments', 'Payments'], ['/app/documents', 'Quotations & invoices', 'documents.view'], ['/costing', 'Costing and prices'], ['/variance', 'Metre variance'], ['/overheads', 'Overheads'], ['/suppliers', 'Tailors and suppliers', 'finance.view'], ['/inventory', 'Inventory', 'inventory.view'], ['/quality', 'Quality checks', 'qc.view'], ['/reports', 'Reports', 'reports.view'], ['/audit', 'Audit log'], ['/data', 'Data and backups'], ['/ai', 'AI assistant'], ['/admin/staff', 'Staff access', 'staff.manage']]
 
 function SignIn() {
   const [email, setEmail] = useState(''), [pass, setPass] = useState(''), [err, setErr] = useState('')
