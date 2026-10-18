@@ -54,7 +54,7 @@ export const initial = () => ({
   user: 'Staff 1',
   R: { print: 50, fabric: 18, press: 10, sew: 25 }, // print, fabric, press per metre; sew per shirt
   T: { adult: [200, 180], kids: [150, 130] },
-  thr: 10, dep: 50, seq: 0, over: [], orders: [], audit: [], finance: [],
+  thr: 10, dep: 50, seq: 0, over: [], orders: [], audit: [], finance: [], inventory: [], qc: [],
   tol: 5, // allowed difference (%) between theoretical and actual printed metres
   types: [...TYPES0.map((n) => ({ n, m: 1 })), ...NEW_PRODUCTS()],
   catalogV: CATALOG_V,
@@ -271,6 +271,39 @@ export function materialPlan(S, lines, o) {
   }
 }
 
+// Payments to tailors and fabric suppliers. They live in the expense ledger (S.finance) so they reach the expenses table and Power BI.
+// They are real money paid out, so they are shown next to the estimate and are NOT added to the production cost a second time.
+export const PAYOUT = ['Tailor payment', 'Supplier payment']
+export const isPayout = (x) => PAYOUT.includes(x.category)
+export const payoutsOf = (S, jc) => (S.finance || []).filter((x) => isPayout(x) && x.ref === jc)
+
+// Quality check points. The latest result for each point decides the job's quality status.
+export const QC_POINTS = ['Print quality', 'Colour match', 'Sizes and measurements', 'Stitching and finishing', 'Count and packing']
+export function qcState(S, jc) {
+  const last = new Map()
+  ;(S.qc || []).filter((x) => x.jc === jc).forEach((x) => last.set(x.point, x)) // entries are kept oldest first, so the last one wins
+  const failed = QC_POINTS.filter((p) => last.get(p) && last.get(p).result === 'Fail')
+  const missing = QC_POINTS.filter((p) => !last.get(p))
+  const status = failed.length ? 'Failed' : missing.length ? (missing.length === QC_POINTS.length ? 'Not checked' : 'Partly checked') : 'Passed'
+  return { status, failed, missing, last }
+}
+
+// Fabric stock that a job card will use. Matches each colour group in the materials plan to a fabric item with the same colour.
+export function stockNeeds(S, o) {
+  const plan = materialPlan(S, o.lines, o), items = (S.inventory || []).filter((i) => i.kind === 'fabric')
+  const use = [], missing = []
+  plan.rows.forEach((r) => {
+    if (!(r.metres > 0)) return
+    const col = r.colour.toLowerCase(), fab = (r.fabric || '').toLowerCase()
+    const cand = items.filter((i) => String(i.colour || '').trim().toLowerCase() === col && (!i.fabric || !fab || String(i.fabric).trim().toLowerCase() === fab))
+    if (!cand.length) { missing.push(r.colour); return }
+    const it = cand.slice().sort((a, b) => (+b.qty || 0) - (+a.qty || 0))[0]
+    use.push({ id: it.id, name: it.name, m: +r.metres.toFixed(3) })
+  })
+  return { use, missing }
+}
+export const lowStock = (S) => (S.inventory || []).filter((i) => (+i.min || 0) > 0 && (+i.qty || 0) <= +i.min)
+
 export function costParts(S, ord) {
   const jobs = ord.map((o) => {
     const f = metresFactor(S, o), v = [0, 0, 0, 0]
@@ -281,7 +314,7 @@ export function costParts(S, ord) {
       sh += q
     })
     const jx = (S.finance || []).filter((x) => x.ref === o.jc), w = (x) => x.category === 'Wastage and rework'
-    return { o, sh, v: [...v, sum(jx.filter(w), (x) => x.amount), sum(jx.filter((x) => !w(x)), (x) => x.amount)] }
+    return { o, sh, v: [...v, sum(jx.filter(w), (x) => x.amount), sum(jx.filter((x) => !w(x) && !isPayout(x)), (x) => x.amount)] }
   })
   return { jobs, comp: COST_N.map((_, i) => sum(jobs, (j) => j.v[i])) }
 }
@@ -413,7 +446,13 @@ export function reduce(S, a) {
     case 'produce': {
       const o = S.orders.find((x) => x.jc === a.jc)
       if (!o || !calc(S, o).ok) return S
-      return { ...add(log('Moved to production', a.jc)), orders: S.orders.map((x) => (x.jc === a.jc ? { ...x, prod: true, stages: x.stages && x.stages.length ? x.stages : mkStages(), prodStatus: STAGES[0] } : x)) }
+      const need = o.prod ? { use: [], missing: [] } : stockNeeds(S, o)
+      const inventory = (S.inventory || []).map((i) => { const u = need.use.filter((x) => x.id === i.id); return u.length ? { ...i, qty: +((+i.qty || 0) - sum(u, (x) => x.m)).toFixed(3) } : i })
+      const msgs = [log('Moved to production', a.jc)]
+      need.use.forEach((u) => msgs.push(log(`Fabric used: ${u.m.toFixed(2)} m of ${u.name} taken from stock`, a.jc)))
+      if (need.missing.length) msgs.push(log(`No fabric stock item matches colour ${need.missing.join(', ')}, so nothing was taken from stock for it`, a.jc))
+      inventory.filter((i) => need.use.some((x) => x.id === i.id) && (+i.qty || 0) < 0).forEach((i) => msgs.push(log(`Stock of ${i.name} is now ${(+i.qty).toFixed(2)} ${i.unit}: the job used more than was recorded`, a.jc)))
+      return { ...add(...msgs), inventory, orders: S.orders.map((x) => (x.jc === a.jc ? { ...x, prod: true, stages: x.stages && x.stages.length ? x.stages : mkStages(), prodStatus: STAGES[0], ...(need.use.length ? { stockUsed: need.use } : {}) } : x)) }
     }
     case 'stage': {
       const o = S.orders.find((x) => x.jc === a.jc)
@@ -618,7 +657,68 @@ export function reduce(S, a) {
       if (!o) return S
       const c = calc(S, o), fin = (S.finance || []).filter((x) => x.ref === o.jc), why = String(a.reason || '').trim() || 'no reason given', by = a.by || S.user
       const e = log(`Job card ${o.jc} deleted by ${by}: ${why}. Removed with it: ${o.qt}, ${o.inv}, ${o.pays.length} payment(s) totalling ${f2(c.paid)}, ${fin.length} cost entr${fin.length === 1 ? 'y' : 'ies'}. It was for ${o.ent || o.placed || 'unknown customer'}, ${c.q} item(s), net total ${f2(c.net)}${o.closed ? ', already closed' : o.prod ? ', in production' : ''}`, o.jc, by)
-      return { ...add(e), orders: S.orders.filter((x) => x.jc !== o.jc), finance: (S.finance || []).filter((x) => x.ref !== o.jc) }
+      const back = o.stockUsed || []
+      const inventory = (S.inventory || []).map((i) => { const u = back.filter((x) => x.id === i.id); return u.length ? { ...i, qty: +((+i.qty || 0) + sum(u, (x) => x.m)).toFixed(3) } : i })
+      // Money already paid to tailors or suppliers stays in the ledger (unlinked), because it was really paid.
+      const finance = (S.finance || []).filter((x) => x.ref !== o.jc || isPayout(x)).map((x) => (x.ref === o.jc ? { ...x, ref: '', desc: `${x.desc} (was on ${o.jc}, deleted)` } : x))
+      return { ...add(e), inventory, orders: S.orders.filter((x) => x.jc !== o.jc), finance }
+    }
+    case 'itemAdd': {
+      const n = String(a.name || '').trim(), u = String(a.unit || 'm').trim() || 'm'
+      if (!n || !(+a.qty >= 0) || !(+a.min >= 0)) return S
+      if ((S.inventory || []).some((i) => i.name.toLowerCase() === n.toLowerCase())) return S
+      const id = 'ST-' + String((S.inventory || []).reduce((t, i) => Math.max(t, parseInt(String(i.id).slice(3), 10) || 0), 0) + 1).padStart(4, '0')
+      const item = { id, name: n, sku: String(a.sku || '').trim(), unit: u, qty: +a.qty, min: +a.min || 0, cost: +a.cost || 0, kind: a.kind === 'fabric' ? 'fabric' : 'other', colour: String(a.colour || '').trim(), fabric: String(a.fabric || '').trim() }
+      return { ...add(log(`Stock item ${n} added with ${item.qty} ${u}`)), inventory: [...(S.inventory || []), item] }
+    }
+    case 'itemEdit': {
+      const i = (S.inventory || []).find((x) => x.id === a.id)
+      if (!i) return S
+      const p = a.patch || {}, next = { ...i }
+      if (typeof p.name === 'string' && p.name.trim()) next.name = p.name.trim()
+      ;['sku', 'colour', 'fabric', 'unit'].forEach((k) => { if (typeof p[k] === 'string') next[k] = p[k].trim() })
+      if (p.kind) next.kind = p.kind === 'fabric' ? 'fabric' : 'other'
+      if (num(p.min) && +p.min >= 0) next.min = +p.min
+      if (num(p.cost) && +p.cost >= 0) next.cost = +p.cost
+      return { ...add(log(`Stock item ${i.name} details updated`)), inventory: S.inventory.map((x) => (x.id === a.id ? next : x)) }
+    }
+    case 'stockIn': {
+      const i = (S.inventory || []).find((x) => x.id === a.id)
+      if (!i || !(+a.qty > 0)) return S
+      const note = String(a.note || '').trim()
+      return { ...add(log(`Stock in: +${(+a.qty).toFixed(2)} ${i.unit} of ${i.name}${note ? ' (' + note + ')' : ''}`)), inventory: S.inventory.map((x) => (x.id === a.id ? { ...x, qty: +((+x.qty || 0) + +a.qty).toFixed(3), cost: num(a.cost) && +a.cost > 0 ? +a.cost : x.cost } : x)) }
+    }
+    case 'stockSet': {
+      const i = (S.inventory || []).find((x) => x.id === a.id), why = String(a.note || '').trim()
+      if (!i || !num(a.qty) || !why) return S
+      return { ...add(log(`Stock count of ${i.name} corrected from ${(+i.qty || 0).toFixed(2)} to ${(+a.qty).toFixed(2)} ${i.unit}: ${why}`)), inventory: S.inventory.map((x) => (x.id === a.id ? { ...x, qty: +a.qty } : x)) }
+    }
+    case 'itemDel': {
+      const i = (S.inventory || []).find((x) => x.id === a.id)
+      if (!i) return S
+      return { ...add(log(`Stock item ${i.name} removed (${(+i.qty || 0).toFixed(2)} ${i.unit} on record)`)), inventory: S.inventory.filter((x) => x.id !== a.id) }
+    }
+    case 'qcAdd': {
+      const o = S.orders.find((x) => x.jc === a.jc)
+      const rows = (Array.isArray(a.rows) ? a.rows : []).filter((r) => r && QC_POINTS.includes(r.point) && (r.result === 'Pass' || r.result === 'Fail'))
+      if (!o || !rows.length || rows.some((r) => r.result === 'Fail' && !String(r.defect || '').trim())) return S
+      let n = (S.qc || []).reduce((t, x) => Math.max(t, parseInt(String(x.id).slice(3), 10) || 0), 0)
+      const made = rows.map((r) => ({ id: 'QC-' + String(++n).padStart(4, '0'), date: TODAY, jc: o.jc, point: r.point, result: r.result, qty: Math.max(0, Math.round(+r.qty || 0)), defect: String(r.defect || '').trim(), action: String(r.action || '').trim(), by: S.user }))
+      const bad = made.filter((x) => x.result === 'Fail').length
+      return { ...add(log(`Quality check: ${made.length - bad} passed, ${bad} failed${bad ? ' (' + made.filter((x) => x.result === 'Fail').map((x) => x.point).join(', ') + ')' : ''}`, o.jc)), qc: [...(S.qc || []), ...made] }
+    }
+    case 'spayAdd': {
+      const who = String(a.who || '').trim(), kind = a.kind === 'Supplier' ? 'Supplier' : 'Tailor', jc = String(a.jc || '').trim()
+      if (!who || !(+a.amount > 0) || !a.d || (jc && !S.orders.some((o) => o.jc === jc))) return S
+      const id = 'PAY-' + String((S.finance || []).reduce((t, x) => Math.max(t, /^PAY-/.test(String(x.id)) ? parseInt(String(x.id).slice(4), 10) || 0 : 0), 0) + 1).padStart(4, '0')
+      const note = String(a.note || '').trim()
+      const fin = { id, date: a.d, category: kind + ' payment', desc: `${who}${note ? ': ' + note : ''}`, amount: +(+a.amount).toFixed(2), ref: jc, by: S.user, who }
+      return { ...add(log(`${kind} payment ${f2(fin.amount)} to ${who}${jc ? '' : ' (no job card)'}`, jc)), finance: [...(S.finance || []), fin] }
+    }
+    case 'spayDel': {
+      const x = (S.finance || []).find((y) => y.id === a.id && isPayout(y))
+      if (!x) return S
+      return { ...add(log(`${x.category} of ${f2(x.amount)} to ${x.who || x.desc} removed`, x.ref || '')), finance: S.finance.filter((y) => y.id !== a.id) }
     }
     case 'addOver': return { ...add(log(`Overhead ${a.n} added: ${f2(a.a)} on ${a.d}${a.jc ? ' (direct cost of ' + a.jc + ')' : ' (shared)'}`, a.jc || '')), over: [...S.over, { n: a.n, a: a.a, d: a.d, ...(a.jc ? { jc: a.jc } : {}) }] }
     case 'delOver': { const x = S.over[a.i]; return x ? { ...add(log(`Overhead ${x.n} (${f2(x.a)} on ${x.d}) removed`, x.jc || '')), over: S.over.filter((_, i) => i !== a.i) } : S }
@@ -643,6 +743,10 @@ export function alerts(S) {
     } else if (o.prod && !o.closed && (o.stages || []).length && o.stages.every(isDone)) {
       out.push(`${o.jc}: all stages done but actual printing metres not recorded`)
     }
+  })
+  lowStock(S).forEach((i) => out.push(`Low stock: ${i.name} has ${(+i.qty || 0).toFixed(2)} ${i.unit} left (minimum ${(+i.min).toFixed(2)})`))
+  S.orders.forEach((o) => {
+    if (!o.closed && phase(S, o) === 'Ready for collection' && qcState(S, o.jc).status !== 'Passed') out.push(`${o.jc}: ready for collection but the quality check is ${qcState(S, o.jc).status.toLowerCase()}`)
   })
   return out
 }
