@@ -6,7 +6,8 @@
 //   2. Reading pass  - the list is cut into chunks that are read in parallel, each one told the pattern.
 //   3. Size resolver - sizes are matched by a forgiving resolver (dashes, "YEARS" vs "yrs", "1 small", XXL, ages, ranges),
 //                      not by exact text, so "13 -14 YEARS" finds "13–14 yrs" and "small" finds "S".
-//   4. Coverage check - every pasted line is accounted for, and anything the AI missed is reported by line number.
+//   4. Coverage check - every pasted line must be accounted for. Any line the AI skipped is sent back to be re-read (up to two rounds)
+//                      and only what is still missing after that is reported by line number.
 //
 // Needs OPENAI_API_KEY in the server environment (Render > Environment).
 // Optional: AI_MODEL (default gpt-6-luna), AI_EFFORT (default medium; use low if it feels slow).
@@ -22,7 +23,7 @@ const MAX_TEXT = 40000;
 const MAX_BODY = 150 * 1024;
 const MAX_LINES = 1500;
 const MAX_ROW = 300;
-const CHUNK = 40; // pasted lines read per AI call
+const CHUNK = 30; // pasted lines read per AI call (smaller chunks make it much less likely that the AI drops lines at the end)
 const PARALLEL = 6; // AI calls at the same time
 const CALL_MS = 85000;
 
@@ -173,6 +174,7 @@ THINK LIKE A CAREFUL HUMAN CLERK, NOT LIKE A PARSER
 - A line with only a quantity and a size ("1 small", "3 x L", "13 -14 YEARS") is a valid order line: set qty and size, leave the name empty.
 - Typos, odd spacing, capital letters and short forms (sm, med, lrg, yrs, yo) are normal. Read the intent.
 - Never drop a line that holds a garment. If you are unsure, still return the line with your best reading and add a warning.
+- Your "lines" answer must cover the input from the first line marker to the LAST one. Before you finish, check that every marker is either in "lines" or in "skipped".
 ${pattern ? `\nThe layout of this list, studied from sample lines (use it as a guide, not as a rule; trust the line itself when it differs):\n${pattern}\n` : ""}
 Return ONLY a JSON object:
 {"lines":[{"ln":12,"size":"","raw":"","colour":"","garment":"","name":"","fabric":"","qty":1,"price":null}],"skipped":[{"ln":1,"why":"heading"}],"warnings":[""]}
@@ -217,9 +219,20 @@ async function study(rows) {
   }
 }
 
-async function readChunk(chunk, info, pattern) {
+async function readChunk(chunk, info, pattern, note = "") {
   const body = chunk.map((r) => `[L${r.ln}] ${r.t}`).join("\n");
-  return callWithRetry(READ_PROMPT(info, pattern), `Order details to read. Return JSON only.\n\n<order_text>\n${body}\n</order_text>`);
+  return callWithRetry(READ_PROMPT(info, pattern), `Order details to read. Return JSON only.${note ? "\n" + note : ""}\n\n<order_text>\n${body}\n</order_text>`);
+}
+
+const BLANK_ROW = /^[\s\-\u2010-\u2015_.|,;:*]+$/;
+// Line numbers the AI has answered for, either as order lines or as skipped (headings and so on).
+function seenLns(answers) {
+  const s = new Set();
+  for (const a of answers) {
+    for (const k of Array.isArray(a.skipped) ? a.skipped : []) { const n = num(k?.ln); if (n != null) s.add(n); }
+    for (const l of Array.isArray(a.lines) ? a.lines : []) { const n = num(l?.ln); if (n != null) s.add(n); }
+  }
+  return s;
 }
 
 async function pool(items, limit, worker) {
@@ -264,8 +277,7 @@ function tidy(answers, rows, sizes) {
   for (const [raw, n] of badSize) warnings.push(`Size "${raw}" (${n} line${n > 1 ? "s" : ""}) could not be matched to the size list. Choose the size by hand in the order items.`);
 
   // Every pasted line must be accounted for.
-  const blank = /^[\s\-\u2010-\u2015_.|,;:*]+$/;
-  const missed = rows.filter((r) => !seen.has(r.ln) && !blank.test(r.t));
+  const missed = rows.filter((r) => !seen.has(r.ln) && !BLANK_ROW.test(r.t));
   if (missed.length) {
     warnings.push(`${missed.length} pasted line${missed.length > 1 ? "s were" : " was"} not read: ` + missed.slice(0, 6).map((r) => `line ${r.ln} "${r.t.slice(0, 40)}"`).join("; ") + (missed.length > 6 ? ` and ${missed.length - 6} more.` : "."));
   }
@@ -328,8 +340,22 @@ export async function POST(req) {
     })).filter(Boolean);
     if (!answers.length) throw new UserError(failed[0]?.msg || "The AI service could not read this list.");
 
+    // Any line the AI left out (or a whole chunk that failed) goes back for a second and third look, in small batches.
+    for (let round = 0; round < 2; round++) {
+      const seen = seenLns(answers);
+      const missed = rows.filter((r) => !seen.has(r.ln) && !BLANK_ROW.test(r.t));
+      if (!missed.length) break;
+      const batches = [];
+      for (let i = 0; i < missed.length; i += 15) batches.push(missed.slice(i, i + 15));
+      const more = await pool(batches, PARALLEL, async (c) => {
+        try { return await readChunk(c, info, pattern, "These lines were skipped in an earlier read. Return an order line for every one of them (or list it in skipped if it is a heading)."); }
+        catch (e) { console.error("parse-order re-read failed:", e?.message); return null; }
+      });
+      answers.push(...more.filter(Boolean));
+    }
+
+    // tidy() reports whatever is still missing after the re-reads, by line number.
     const result = tidy(answers, rows, sizes);
-    for (const f of failed) result.warnings.unshift(`Lines ${f.c[0].ln} to ${f.c[f.c.length - 1].ln} could not be read (${f.msg}) Read the list again, or paste those lines on their own.`);
     return ok({ ...result, model: MODEL, patternUsed: !!pattern });
   } catch (e) {
     return serverError("documents/parse-order", e);
